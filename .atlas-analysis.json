@@ -1,0 +1,125 @@
+{
+  "projectType": "framework",
+  "projectName": "FrankerFaceZ",
+  "projectDescription": "A powerful Twitch enhancement suite that provides custom emotes, a rich add-on system, and deep Twitch UI customization through a modular plugin framework.",
+  "theme": "almond",
+  "primaryColor": "#fcad06",
+  "lightColor": "#eee6d2",
+  "darkColor": "#4c4c4c",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/module-system",
+              "concepts/settings",
+              "concepts/events"
+            ]
+          },
+          {
+            "group": "Add-on Development",
+            "pages": [
+              "addons/overview",
+              "addons/getting-started",
+              "addons/addon-class",
+              "addons/module-lifecycle",
+              "addons/settings-api",
+              "addons/chat-integration"
+            ]
+          },
+          {
+            "group": "Site Integration",
+            "pages": [
+              "sites/twitch",
+              "sites/chat-modules",
+              "sites/css-tweaks"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/setup",
+              "contributing/building",
+              "contributing/editor-settings"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Core API",
+            "pages": [
+              "api/frankerfacez",
+              "api/module",
+              "api/addon",
+              "api/event-emitter"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/utilities/settings",
+              "api/utilities/logging",
+              "api/utilities/dom",
+              "api/utilities/color",
+              "api/utilities/filtering",
+              "api/utilities/i18n"
+            ]
+          },
+          {
+            "group": "Modules",
+            "pages": [
+              "api/modules/chat",
+              "api/modules/emotes",
+              "api/modules/badges",
+              "api/modules/main-menu"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Custom emote support with emote sets and emote management",
+    "Modular add-on system with full lifecycle management (load/unload/enable/disable)",
+    "Deep Twitch UI customization via CSS tweaks and component overrides",
+    "Robust settings system with profiles, contexts, and providers",
+    "Real-time event system with typed namespaced events",
+    "Chat enhancement with custom tokenizers, badges, and link providers",
+    "Internationalization (i18n) and translation support",
+    "Experiments and A/B testing framework",
+    "Socket-based real-time communication with FrankerFaceZ servers",
+    "Browser extension and userscript deployment modes"
+  ],
+  "publicApiSurface": [
+    "FrankerFaceZ (main class, window.ffz)",
+    "Module (base class for all modules and add-ons)",
+    "Addon (subclass of Module for add-on root modules)",
+    "Addon.register(id, info) — registers an add-on with FFZ",
+    "Module.inject(name, module) — injects a module dependency",
+    "Module.register(name, module) — registers a child module",
+    "Module.resolve(name) — resolves a module by path",
+    "Module.enable() / Module.disable()",
+    "Module.load() / Module.unload()",
+    "SettingsManager.add(key, definition) — registers a setting",
+    "SettingsManager.get(key) — retrieves a setting value",
+    "SettingsManager.set(key, value) — sets a setting value",
+    "EventEmitter.on(event, fn) / EventEmitter.off(event, fn)",
+    "EventEmitter.emit(event, ...args)",
+    "FrankerFaceZ.utilities (addon, blobs, color, dom, events, filtering, graphql, logging, module, object, time, tooltip, i18n)"
+  ]
+}
