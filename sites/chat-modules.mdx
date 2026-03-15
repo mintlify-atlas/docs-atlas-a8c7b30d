@@ -1,0 +1,151 @@
+---
+title: Chat Modules
+description: How FrankerFaceZ's chat sub-modules are structured on Twitch — the main chat hook, sub-modules for individual chat features, and how they interact with Twitch's React components.
+---
+
+The chat integration lives in `src/sites/twitch-twilight/modules/chat/`. The main `ChatHook` module (`index.js`) acts as the orchestrator and injects a set of focused sub-modules, each responsible for one area of the chat UI.
+
+## Module structure
+
+```
+src/sites/twitch-twilight/modules/chat/
+├── index.js          # ChatHook — main orchestrator
+├── line.js           # Individual chat line rendering
+├── input.jsx         # Chat input bar
+├── scroller.js       # Chat scroll container
+├── emote_menu.jsx    # Emote picker
+├── settings_menu.jsx # Chat settings menu
+├── viewer_card.jsx   # Viewer info card
+├── rich_content.jsx  # Rich content (embeds, clips)
+├── points.js         # Channel Points reward handling
+└── sub_status.gql    # Subscription status GraphQL query
+```
+
+## ChatHook (index.js)
+
+`ChatHook` extends `Module` with `should_enable = true`, meaning it activates automatically. In its constructor it:
+
+1. Injects shared services (`settings`, `i18n`, `experiments`, `site.fine`, `site.web_munch`, `site.css_tweaks`, `site.subpump`, `chat`)
+2. Injects all chat sub-modules
+3. Defines Fine component handles for every Twitch React component that needs patching
+
+```js
+export default class ChatHook extends Module {
+	constructor(...args) {
+		super(...args);
+		this.should_enable = true;
+
+		this.inject('site.fine');
+		this.inject('chat');
+
+		this.inject(Scroller);
+		this.inject(ChatLine);
+		this.inject(SettingsMenu);
+		this.inject(EmoteMenu);
+		this.inject(Input);
+		this.inject(ViewerCards);
+	}
+}
+```
+
+## Fine component handles
+
+Each `fine.define()` call names a Twitch React component and provides a matcher function that identifies it by its live instance properties. All handles are scoped to `Twilight.CHAT_ROUTES` so they only scan when chat is present.
+
+| Handle name | Matcher signature | Role |
+|---|---|---|
+| `chat-service` | `n.join && n.client && n.props.setChatConnectionAPI` | Manages the IRC/WebSocket connection |
+| `chat-buffer` | `n.updateHandlers && n.delayedMessageBuffer && n.handleMessage` | Buffers incoming messages before rendering |
+| `chat-buffer-connector` | `n.clearBufferHandle && n.syncBufferedMessages` | Syncs buffered messages to the render tree |
+| `chat-controller` | `n.parseOutgoingMessage && n.sendMessage && n.renderCommandHandlers` | Handles outgoing messages and slash commands |
+| `chat-renderer` | `n.mapMessagesToChatLines && n.reportChatRenderSent` | Maps messages to rendered line components |
+| `chat-container` | `n.closeViewersList && n.onChatInputFocus` | Top-level chat container |
+| `chat-reward-event-handler` | `n.unsubscribe && n.handleMessage && n.props.rewardMap` | Processes Channel Points reward messages |
+| `raid-controller` | `n.handleLeaveRaid && n.handleJoinRaid` | Raid join/leave logic |
+| `points-button` | `n.renderIcon && n.renderFlame && n.handleIconAnimationComplete` | Channel Points claim button icon |
+| `points-claim-button` | `n.getClaim && n.onClick && n.props.claimCommunityPoints` | Channel Points claim action |
+| `inline-callout` | `n.showCTA && n.toggleContextMenu && n.actionClick` | Inline notification callouts in chat |
+| `pinned-callout` | `n.getCalloutTitle && n.buildCalloutProps && n.pin` | Pinned notification callouts |
+| `callout-selector` | `n.selectCalloutComponent && has(n.props, 'callouts')` | Selects which callout component to render |
+| `chat-leaderboard` | `n.props.topItems && has(n.props, 'forceMiniView')` | Bits/sub leaderboard |
+
+## Message type enumerations
+
+FFZ mirrors Twitch's internal message type enumerations to avoid magic strings. These are defined with a custom `make_enum` utility:
+
+```js
+const MESSAGE_TYPES = make_enum('Post', 'Action');
+const MOD_TYPES = make_enum('Ban', 'Timeout', 'Delete');
+const AUTOMOD_TYPES = make_enum(
+	'MessageRejectedPrompt',
+	'MessageRejected',
+	'MessageAllowed',
+	'MessageDenied',
+	// ...
+);
+```
+
+The full `CHAT_TYPES` enum includes every message type that Twitch's chat system can produce, including subscriptions, gift subs, raids, bits, channel points rewards, AutoMod events, hype chat, and system notices.
+
+### Unblockable types
+
+`UNBLOCKABLE_TYPES` lists message types that FFZ never hides regardless of user filter settings — primarily system and moderation messages:
+
+```js
+const UNBLOCKABLE_TYPES = [
+	'Message', 'Notice', 'Moderation', 'ModerationAction',
+	'AutoMod', 'SubscriberOnlyMode', 'FollowerOnlyMode',
+	'Connected', 'Disconnected', 'RoomMods', 'RoomState', ...
+];
+```
+
+## Sub-module responsibilities
+
+<CardGroup cols={2}>
+  <Card title="ChatLine (line.js)" icon="message">
+    Intercepts individual message render calls. Applies FFZ badge injection, emote replacement, mention highlighting, and custom message filters to each rendered line.
+  </Card>
+  <Card title="Scroller (scroller.js)" icon="arrow-down">
+    Hooks the chat scroll container to control auto-scroll behaviour and apply FFZ scroll settings.
+  </Card>
+  <Card title="Input (input.jsx)" icon="keyboard">
+    Patches the chat input bar to add the FFZ emote menu button and handle custom autocomplete.
+  </Card>
+  <Card title="EmoteMenu (emote_menu.jsx)" icon="face-smile">
+    Renders the FFZ emote picker, integrating FFZ, BTTV, and 7TV emote sets alongside native Twitch emotes.
+  </Card>
+  <Card title="SettingsMenu (settings_menu.jsx)" icon="gear">
+    Adds the FFZ entry point to the Twitch chat settings popover.
+  </Card>
+  <Card title="ViewerCards (viewer_card.jsx)" icon="id-card">
+    Patches the viewer info card to display FFZ badges and extra information.
+  </Card>
+</CardGroup>
+
+## Color adjustment
+
+`ChatHook` instantiates two `ColorAdjuster` instances at construction time:
+
+```js
+this.colors = new ColorAdjuster;        // adjusts username colors for readability
+this.inverse_colors = new ColorAdjuster; // adjusts colors on dark-on-light backgrounds
+```
+
+These are used by `ChatLine` when rendering usernames to ensure sufficient contrast against the current background color.
+
+## Callout type mapping
+
+Twitch's notification callout system uses string identifiers that FFZ maps to component types:
+
+```js
+const CALLOUT_TYPES = {
+	'AppointedModerator': 'appointed-moderator',
+	'BitsBadgeTier': 'bits-badge-tier',
+	'ClipLiveNudge': 'clip-live-nudge',
+	'Drop': 'drop',
+	'HypeTrainRewards': 'hype-train-rewards',
+	// ...
+};
+```
+
+This mapping is used by the `CalloutSelector` and `PinnedCallout` hooks to decide which callouts FFZ should modify or suppress.

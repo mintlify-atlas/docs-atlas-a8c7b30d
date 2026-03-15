@@ -1,0 +1,178 @@
+---
+title: Addon Class
+description: Complete API reference for the Addon class — constructor, static info, register(), and auto-injected dependencies.
+---
+
+The `Addon` class (defined in `src/utilities/addon.ts`) is a specialised sub-class of `Module`. Every add-on entry point must extend it.
+
+```typescript
+import { Addon } from 'utilities/addon';
+
+class MyAddon extends Addon {
+  static info = { /* ... */ };
+
+  async onEnable() { /* ... */ }
+  async onDisable() { /* ... */ }
+}
+
+MyAddon.register();
+```
+
+## Static properties
+
+### `static info`
+
+An object of type `AddonInfo` (defined in `src/utilities/types.ts`). This is the manifest for your add-on and is shown in the FFZ control center.
+
+```typescript
+static info = {
+  id: 'my-addon',           // Required. Unique snake_case or kebab-case identifier.
+  name: 'My Add-on',        // Required. Human-readable display name.
+  author: 'YourName',       // Required. Author name.
+  description: 'Does things.', // Required. Shown in the add-ons list. Supports Markdown.
+  version: '1.2.0',         // Semantic version string.
+
+  // Optional fields:
+  short_name: 'MA',         // Abbreviated name used in space-constrained UIs.
+  maintainer: 'OtherPerson',// If different from author.
+  website: 'https://...',   // Adds a "Website" button in the add-ons panel.
+  settings: 'Add-Ons >> My Add-on', // Settings path; adds a "Settings" button.
+  search_terms: 'emote badge twitch', // Extra terms for the add-ons search.
+
+  // Runtime / targeting:
+  targets: ['main'],        // FFZ flavors this add-on supports: 'main', 'clips', 'player'.
+  requires: [],             // IDs of other add-ons that must be enabled first.
+};
+```
+
+<Note>
+The `id` field in `static info` must match the ID you pass to `register()`. If you omit the ID from both, FFZ derives it from the class name via `toSnakeCase()`.
+</Note>
+
+<ParamField path="id" type="string" required>
+  Unique identifier for the add-on. Used as the module path (`addon.<id>`), as a namespace for settings keys, and as a prefix for badge/emote-set IDs.
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  Human-readable name shown in the control center Add-Ons list.
+</ParamField>
+
+<ParamField path="author" type="string" required>
+  Name of the add-on's creator.
+</ParamField>
+
+<ParamField path="description" type="string" required>
+  Short description shown in the add-ons list. Supports Markdown.
+</ParamField>
+
+<ParamField path="version" type="string">
+  Semantic version string (e.g. `"1.0.0"`). Displayed in the add-ons list and used for update checks.
+</ParamField>
+
+<ParamField path="targets" type="string[]">
+  List of FFZ flavors this add-on should be loaded on. Defaults to `['main']`. Valid values: `'main'`, `'clips'`, `'player'`.
+</ParamField>
+
+<ParamField path="website" type="string">
+  URL to the add-on's home page or repository. Adds a **Website** button in the add-ons panel.
+</ParamField>
+
+<ParamField path="settings" type="string">
+  A settings UI path (e.g. `'Add-Ons >> My Add-on'`). When set, adds a **Settings** button in the add-ons panel that navigates directly to this path.
+</ParamField>
+
+<ParamField path="requires" type="string[]">
+  IDs of other add-ons that must be enabled before this one. The AddonManager respects this list.
+</ParamField>
+
+### `static version`
+
+An alternative way to provide a version string, separate from `static info`. When passed to `register()` it is recorded in the `AddonManager`.
+
+## Auto-injected dependencies
+
+The `Addon` constructor automatically calls `this.inject('i18n')` and `this.inject('settings')`, so your add-on always has:
+
+| Property | Type | Description |
+|---|---|---|
+| `this.i18n` | `TranslationManager` | Localisation helper. Use `this.i18n.t(key, fallback, data)` to produce translated strings. |
+| `this.settings` | `SettingsManager` | The FFZ settings system. Call `add()`, `get()`, `onChange()`, and `on()` on this. |
+| `this.log` | `Logger` | A logger scoped to your module's path. Inherits the FFZ log level hierarchy. |
+
+## Injecting additional modules
+
+Call `this.inject(path)` in your constructor (before `super()` returns, i.e. inside `constructor()`) to declare dependencies on other FFZ modules. The module will be assigned as a property with the last segment of its path as the name.
+
+```javascript
+class MyAddon extends Addon {
+  constructor(name, parent) {
+    super(name, parent);
+
+    // Inject the chat module — available as this.chat
+    this.inject('chat');
+
+    // Inject chat.emotes — available as this.emotes
+    this.inject('chat.emotes');
+  }
+
+  async onEnable() {
+    // this.chat and this.emotes are now available and guaranteed enabled
+    this.log.info('Chat module:', this.chat);
+  }
+}
+```
+
+<Warning>
+Injected modules are only guaranteed to be fully enabled by the time `onEnable()` runs. Do not use them in the constructor body after `inject()` calls.
+</Warning>
+
+## The `register()` static method
+
+```typescript
+static register(id?: string | AddonInfo, info?: AddonInfo, version?: string): void
+```
+
+`register()` performs three things:
+
+1. Determines the add-on ID (from the argument, from `static info.id`, or from the class name).
+2. Calls `addons.addAddon(info)` to register the manifest with `AddonManager`.
+3. Calls `ffz.register('addon.<id>', MyAddon)` to mount the class in the module tree, which causes `AddonManager` to call `enable()` if the user has the add-on turned on.
+
+```javascript
+// Simplest form — ID and info come from static info
+MyAddon.register();
+
+// Override just the ID
+MyAddon.register('my-addon');
+
+// Provide full info inline (overrides static info)
+MyAddon.register({
+  id: 'my-addon',
+  name: 'My Add-on',
+  author: 'Me',
+  description: 'Does stuff.',
+});
+
+// Provide id + info object separately
+MyAddon.register('my-addon', { name: 'My Add-on', author: 'Me', description: '...' });
+```
+
+<Note>
+`register()` must be called **after** the class definition is complete — typically as the last statement in your entry-point file. FFZ may call `enable()` synchronously from within `register()` if the user already has the add-on enabled.
+</Note>
+
+## Resolving other modules
+
+In addition to `inject()`, you can resolve any module by path at any time using `this.resolve(path)`:
+
+```javascript
+async onEnable() {
+  // Resolve the Badges sub-module of chat
+  const badges = this.resolve('chat.badges');
+  if (badges) {
+    badges.loadBadgeData('my-addon.cool-badge', { /* ... */ });
+  }
+}
+```
+
+`resolve()` returns `null` if the module does not exist. Unlike `inject()`, it does not create a dependency or guarantee the module is enabled.

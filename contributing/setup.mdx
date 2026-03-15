@@ -1,0 +1,72 @@
+---
+title: Development Setup
+description: How to set up a local FrankerFaceZ development environment — installing dependencies, running the dev server, and loading your local build on Twitch.
+---
+
+FrankerFaceZ uses [Node.js](https://nodejs.org/) and [pnpm](https://pnpm.io/) to manage dependencies and run a local HTTPS development server. The dev server serves your local build on port 8000 and falls back to the FFZ CDN for any files that aren't present locally.
+
+## Prerequisites
+
+- **Node.js** — any current LTS release
+- **pnpm** — install via `npm install -g pnpm` or follow the [pnpm installation guide](https://pnpm.io/installation)
+
+## Installation
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/FrankerFaceZ/FrankerFaceZ.git
+    cd FrankerFaceZ
+    ```
+  </Step>
+  <Step title="Install dependencies">
+    ```bash
+    pnpm install
+    ```
+  </Step>
+  <Step title="Start the development server">
+    ```bash
+    pnpm start
+    ```
+
+    This runs `webpack-dev-server` in development mode. The server listens on `https://localhost:8000/script/`.
+
+    <Warning>
+      The dev server uses a self-signed TLS certificate. You must visit `https://localhost:8000` in your browser and accept the certificate warning before FFZ can load files from it.
+    </Warning>
+  </Step>
+  <Step title="Switch Twitch to the userscript build">
+    The userscript version of FFZ is designed to load from your local dev server. Install the userscript in your browser (via Tampermonkey or Violentmonkey) instead of the browser extension while developing.
+  </Step>
+  <Step title="Enable debug mode on Twitch">
+    Open your browser console on any Twitch page and run:
+
+    ```javascript
+    localStorage.ffzDebugMode = true;
+    ```
+
+    Then reload the page. FFZ will now load `avalon.js` and associated chunks from `https://localhost:8000/script/` instead of the CDN.
+  </Step>
+</Steps>
+
+## Verifying the setup
+
+After enabling debug mode and reloading Twitch, open the browser console. You should see FFZ log messages including the version string and a list of loaded modules. Any changes you make to source files will trigger an automatic webpack rebuild; reload the Twitch page to pick up the new build.
+
+## Editing the icon font
+
+FFZ uses a custom icon font built with [Fontello](https://fontello.com/). To edit it:
+
+```bash
+pnpm font
+```
+
+This creates or reopens a Fontello session and opens your default browser to the Fontello editor. If the dev server is running, clicking Fontello's **Export** button automatically saves the updated font to your local checkout. If the dev server is not running, download the changes manually with:
+
+```bash
+pnpm font:save
+```
+
+<Tip>
+  The `pnpm font:save` command calls `pnpm font:update` automatically to post-process the downloaded font files into the format expected by the FFZ build.
+</Tip>

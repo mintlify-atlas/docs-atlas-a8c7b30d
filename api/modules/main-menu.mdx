@@ -1,0 +1,258 @@
+---
+title: Main Menu Module
+description: API reference for the FrankerFaceZ Main Menu module — adding settings categories, pages, and UI components to the FFZ control center.
+---
+
+The Main Menu module (`main_menu`) drives the FFZ control center dialog. Add-ons integrate with it exclusively through the **Settings API** — by registering settings with a `ui.path` that places them inside the menu hierarchy. The menu builds its navigation tree automatically from all registered settings and UI structures.
+
+<Note>
+  You do not interact with the Main Menu module directly. All menu integration goes through `this.settings.add()` and `this.settings.addUI()`.
+</Note>
+
+---
+
+## Path Syntax
+
+Every settings `ui.path` places a setting inside the menu tree. Paths use `>` as a separator with optional JSON metadata in `@{...}` blocks:
+
+```
+'Category > Page >> Tab'
+'Category @{"sort": -100} > Page > Section >> Tab'
+```
+
+| Separator | Meaning |
+|---|---|
+| `>` | Sub-category / page |
+| `>>` | Tab within a page |
+| `~>` | Tab group (e.g. `tabs ~> Tab Name`) |
+
+---
+
+## Adding a Settings Page
+
+Call `this.settings.addUI()` inside your module's constructor to add a top-level page or a page nested under an existing category:
+
+```javascript
+// Top-level category with a custom page component
+this.settings.add('my-addon.example-setting', {
+  default: true,
+  ui: {
+    path: 'Add-Ons > My Add-on >> General',
+    title: 'Enable example feature',
+    description: 'Turn the example feature on or off.',
+    component: 'setting-check-box'
+  }
+});
+```
+
+The path `'Add-Ons > My Add-on >> General'` will:
+1. Place the setting under the built-in **Add-Ons** top-level category.
+2. Create a **My Add-on** sub-page (if it does not already exist).
+3. Place the setting inside the **General** tab on that page.
+
+---
+
+## Adding a Custom UI Structure
+
+For richer pages (Markdown docs, custom Vue components, etc.) use `settings.addUI()`:
+
+```javascript
+this.settings.addUI('my-addon.help', {
+  path: 'Add-Ons > My Add-on > Help @{"profile_warning": false}',
+  component: 'md-page',
+  key: 'my-help-content'       // key into the add-on's markdown bundle
+});
+```
+
+```javascript
+this.settings.addUI('my-addon.dashboard', {
+  path: 'Add-Ons > My Add-on >> Dashboard',
+  component: 'my-addon--dashboard',  // Vue component registered via vue.component()
+  // Any extra props you add here are passed through to the component:
+  getAddon: () => this
+});
+```
+
+<ParamField path="key" type="string" required>
+  Unique key used to identify this UI structure in the settings tree.
+</ParamField>
+<ParamField path="options" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="path" type="string" required>
+      Menu path using `>` and `>>` separators. See [Path Syntax](#path-syntax).
+    </ParamField>
+    <ParamField path="component" type="string" required>
+      Name of the Vue component to render. Must be registered with `this.vue.component()` before the menu opens. Built-in components include `setting-check-box`, `setting-select-box`, `setting-text-box`, `md-page`, `async-text`.
+    </ParamField>
+    <ParamField path="sort" type="number">
+      Override the sort order of this item within its parent. Lower numbers appear first.
+    </ParamField>
+    <ParamField path="force_seen" type="boolean">
+      When `true`, this item is never marked as "new" in the home page unseen list.
+    </ParamField>
+    <ParamField path="profile_warning" type="boolean">
+      When `false`, suppresses the profile-context warning banner on this page.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+---
+
+## Path Metadata
+
+JSON appended to any path segment with `@{...}` controls display options for that node:
+
+```javascript
+'My Category @{"sort": -500, "profile_warning": false} > My Page'
+```
+
+| Key | Type | Description |
+|---|---|---|
+| `sort` | `number` | Override sort order for this menu node. |
+| `profile_warning` | `boolean` | Set to `false` to hide the profile-context banner. |
+| `hide_children` | `boolean` | Hide child pages from the sidebar. |
+
+---
+
+## Built-in Setting Components
+
+Use these string values for `component` when registering settings:
+
+| Component | Use for |
+|---|---|
+| `setting-check-box` | Boolean toggle |
+| `setting-select-box` | Enum / dropdown |
+| `setting-text-box` | Free-form text or number |
+| `setting-combo-box` | Combobox with suggestions |
+| `md-page` | Markdown content page |
+| `async-text` | Async-loaded text (e.g. logs) |
+| `profile-manager` | Profile management UI |
+
+---
+
+## Registering Custom Vue Components
+
+To use a custom component you must register it with the Vue instance before it is needed:
+
+```javascript
+import { Module } from 'utilities/module';
+
+export default class MyAddon extends Module {
+  constructor(...args) {
+    super(...args);
+    this.inject('settings');
+    this.inject('vue');
+
+    // Register the setting UI
+    this.settings.addUI('my-addon.panel', {
+      path: 'Add-Ons > My Add-on >> Overview',
+      component: 'my-addon--overview',
+      getAddon: () => this
+    });
+  }
+
+  async onLoad() {
+    // Register Vue components before the menu can open
+    const components = (await import('./components.js')).default;
+    this.vue.component(components);
+  }
+}
+```
+
+<Tip>
+  Load Vue components in `onLoad()` rather than `onEnable()` so they are available immediately when the menu first opens, before full module initialization.
+</Tip>
+
+---
+
+## Opening the Menu Programmatically
+
+You can open the FFZ control center and navigate to a specific page:
+
+```javascript
+const menu = this.resolve('main_menu');
+
+// Open the menu
+menu.emit(':open');
+
+// Open and jump to a specific page by its path key
+menu.requestPage('Add-Ons > My Add-on >> General');
+```
+
+### `menu.requestPage(path)`
+
+<ParamField path="path" type="string" required>
+  The full settings path string to navigate to.
+</ParamField>
+
+---
+
+## Menu Events
+
+| Event | Description |
+|---|---|
+| `main_menu:show` | The menu dialog became visible. |
+| `main_menu:hide` | The menu dialog was hidden. |
+| `main_menu::open` | Request to open the menu (you can emit this to open it). |
+
+---
+
+## Full Add-on Example
+
+```javascript
+import { Module } from 'utilities/module';
+
+export default class MyFeature extends Module {
+  constructor(...args) {
+    super(...args);
+    this.inject('settings');
+    this.inject('vue');
+
+    // Boolean toggle under Add-Ons > My Feature
+    this.settings.add('my-addon.feature-enabled', {
+      default: true,
+      ui: {
+        path: 'Add-Ons > My Feature >> General',
+        title: 'Enable My Feature',
+        description: 'Activates the example feature.',
+        component: 'setting-check-box'
+      },
+      changed: val => this.featureToggled(val)
+    });
+
+    // Dropdown
+    this.settings.add('my-addon.mode', {
+      default: 0,
+      ui: {
+        path: 'Add-Ons > My Feature >> General',
+        title: 'Mode',
+        component: 'setting-select-box',
+        data: [
+          { value: 0, title: 'Normal' },
+          { value: 1, title: 'Aggressive' },
+          { value: 2, title: 'Silent' }
+        ]
+      }
+    });
+
+    // Custom documentation page
+    this.settings.addUI('my-addon.about', {
+      path: 'Add-Ons > My Feature > About @{"profile_warning": false}',
+      component: 'my-addon--about'
+    });
+  }
+
+  async onLoad() {
+    const components = (await import('./components.js')).default;
+    this.vue.component(components);
+  }
+
+  featureToggled(enabled) {
+    this.log.info('Feature toggled:', enabled);
+  }
+}
+```
+
+<Warning>
+  All path segments must be stable across versions. Changing a path removes the setting from its former location in the tree, which can confuse users who have already navigated to it.
+</Warning>

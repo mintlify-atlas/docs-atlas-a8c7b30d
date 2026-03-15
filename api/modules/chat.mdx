@@ -1,0 +1,332 @@
+---
+title: Chat Module
+description: API reference for the FrankerFaceZ Chat module — tokenizers, link providers, rich providers, and room/user management.
+---
+
+The Chat module (`chat`) is the central hub for message processing in FrankerFaceZ. Add-ons use it to register tokenizers that parse and transform chat messages, link providers that resolve URL embeds, and to look up room and user objects.
+
+Access the module from an add-on via:
+
+```javascript
+const chat = this.resolve('chat');
+```
+
+---
+
+## Tokenizers
+
+Tokenizers transform the flat list of tokens that make up a chat message. They run in priority order — highest first — and can inspect or replace any token.
+
+### `chat.addTokenizer(tokenizer)`
+
+Register a tokenizer. Each tokenizer must have a unique `type` string. If a tokenizer with the same type is already registered, a warning is logged and the call is ignored.
+
+```javascript
+chat.addTokenizer({
+  type: 'my-addon--highlight',
+  priority: 10,
+
+  process(tokens, msg, user) {
+    // tokens is an array; return a new array or undefined to leave it unchanged
+    return tokens.map(token => {
+      if (token.type !== 'text') return token;
+      if (token.text.includes('PogChamp')) {
+        return { ...token, ffz_class: 'my-highlight' };
+      }
+      return token;
+    });
+  }
+});
+```
+
+<ParamField path="tokenizer" type="object" required>
+  The tokenizer object to register.
+  <Expandable title="properties">
+    <ParamField path="type" type="string" required>
+      Unique identifier for this tokenizer. Convention: `addon-id--descriptor`.
+    </ParamField>
+    <ParamField path="priority" type="number">
+      Execution order. Higher values run first. Defaults to `0`. FFZ's built-in tokenizers use priorities like `50` (links) and `25` (emotes).
+    </ParamField>
+    <ParamField path="process" type="function" required>
+      Called with `(tokens, msg, user, haltable)`. Should return a new token array, or `undefined`/`null` to leave tokens unchanged.
+    </ParamField>
+    <ParamField path="render" type="function">
+      Optional JSX/element renderer for tokens of this type. Signature: `(token, createElement) => element`.
+    </ParamField>
+    <ParamField path="tooltip" type="function">
+      Optional tooltip handler for rendered tokens of this type.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### `chat.removeTokenizer(tokenizer)`
+
+Unregister a tokenizer. Accepts either the tokenizer object or its `type` string.
+
+```javascript
+chat.removeTokenizer('my-addon--highlight');
+// or
+chat.removeTokenizer(tokenizerObject);
+```
+
+<ParamField path="tokenizer" type="string | object" required>
+  The tokenizer object or its `type` string.
+</ParamField>
+
+<ResponseField name="returns" type="object | null">
+  The removed tokenizer object, or `null` if none was found.
+</ResponseField>
+
+---
+
+### Token Object
+
+Tokens are plain objects passed through the tokenizer chain. The base text token is:
+
+```javascript
+{ type: 'text', text: 'Hello world' }
+```
+
+Tokens produced by built-in tokenizers include:
+
+| `type` | Description |
+|---|---|
+| `text` | Plain text fragment |
+| `link` | Hyperlink with `url` and `text` fields |
+| `emote` | Emote with `id`, `src`, `srcSet`, `name` |
+| `mention` | `@username` mention |
+| `cheer` | Bits cheer with `amount` and `color` |
+
+<Note>
+  The `process` function receives `this` bound to the Chat module instance, giving access to `this.context`, `this.i18n`, and other injected services.
+</Note>
+
+---
+
+## Link Providers
+
+Link providers extract rich metadata from specific URL patterns. When a `link` token matches a provider's `test()` method, that provider's `process()` is called to return embed data.
+
+### `chat.addLinkProvider(provider)`
+
+```javascript
+chat.addLinkProvider({
+  type: 'my-addon--mysite',
+
+  test(url) {
+    const match = /mysite\.example\/watch\/([a-z0-9]+)/i.exec(url);
+    if (match) return match[1];  // return the matched ID or truthy value
+  },
+
+  async process(match, received) {
+    // match is the value returned from test()
+    // received may contain pre-fetched data from the FFZ link resolver
+    const data = received ?? await fetch(`https://mysite.example/api/${match}`).then(r => r.json());
+    if (!data) return null;
+
+    return {
+      accent: '#ff5500',
+      fragments: {
+        header: {
+          type: 'header',
+          title: data.title,
+          subtitle: { type: 'style', color: 'alt-2', content: data.author },
+          image: { type: 'image', url: data.thumbnail, sfw: true, aspect: 16/9 }
+        }
+      },
+      short: { type: 'ref', name: 'header' }
+    };
+  }
+});
+```
+
+<ParamField path="provider" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="type" type="string" required>
+      Unique identifier for this provider.
+    </ParamField>
+    <ParamField path="priority" type="number">
+      Determines which provider is tested first when multiple are registered. Defaults to `0`.
+    </ParamField>
+    <ParamField path="test" type="function" required>
+      Called with `(url: string)`. Return a truthy value (typically a match ID) if this provider handles the URL, `false` or `undefined` otherwise.
+    </ParamField>
+    <ParamField path="process" type="function" required>
+      Called with `(match, received)`. `match` is the value returned by `test()`. `received` may contain pre-fetched metadata from the FFZ link resolver. Should return an embed data object or `null`.
+    </ParamField>
+    <ParamField path="receive" type="function">
+      Optional. Called with `(match, rawData)` to transform raw link-resolver data before it is passed to `process()` as `received`.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### `chat.removeLinkProvider(provider)`
+
+```javascript
+chat.removeLinkProvider('my-addon--mysite');
+```
+
+---
+
+## Rich Providers
+
+Rich providers decide whether a token already in the stream (such as a `link` token) should be rendered as a rich content card, and what data to pass to the card component.
+
+### `chat.addRichProvider(provider)`
+
+```javascript
+chat.addRichProvider({
+  type: 'my-addon--card',
+  can_hide_token: true,
+  priority: 5,
+
+  test(token) {
+    return token.type === 'link' && /mysite\.example/.test(token.url);
+  },
+
+  process(token, want_mid) {
+    return {
+      url: token.url,
+      timeout: 0,
+      want_mid,
+      getData: async (refresh = false) => {
+        const data = await this.get_link_info(token.url, false, refresh);
+        return data ?? { url: token.url };
+      }
+    };
+  }
+});
+```
+
+<ParamField path="provider" type="object" required>
+  <Expandable title="properties">
+    <ParamField path="type" type="string" required>
+      Unique identifier.
+    </ParamField>
+    <ParamField path="priority" type="number">
+      Higher values are tested first. Defaults to `0`.
+    </ParamField>
+    <ParamField path="can_hide_token" type="boolean">
+      When `true`, the source link token may be hidden from chat when the rich card is shown.
+    </ParamField>
+    <ParamField path="test" type="function" required>
+      Called with `(token)`. Return `true` if this provider should handle the token.
+    </ParamField>
+    <ParamField path="process" type="function" required>
+      Called with `(token, want_mid)`. Return a rich card data object.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+### `chat.removeRichProvider(provider)`
+
+```javascript
+chat.removeRichProvider('my-addon--card');
+```
+
+---
+
+## Room Management
+
+### `chat.getRoom(id, login, no_create?, no_login?, error?)`
+
+Look up or create a `Room` instance by Twitch numeric ID and/or login name.
+
+```javascript
+const room = chat.getRoom(null, 'pajlada');
+const room = chat.getRoom('12345', null);
+// Look up only, never create:
+const room = chat.getRoom(null, 'pajlada', true);
+```
+
+<ParamField path="id" type="string | number | null">
+  Twitch channel/room ID.
+</ParamField>
+<ParamField path="login" type="string | null">
+  Twitch channel login name (lowercase).
+</ParamField>
+<ParamField path="no_create" type="boolean">
+  When `true`, return `null` instead of creating a new `Room`.
+</ParamField>
+<ParamField path="no_login" type="boolean">
+  When `true`, ignore the `login` argument for lookups.
+</ParamField>
+
+<ResponseField name="returns" type="Room | null">
+  A `Room` instance, or `null` if `no_create` is `true` and no room exists.
+</ResponseField>
+
+---
+
+## User Management
+
+### `chat.getUser(id, login, no_create?, no_login?, error?)`
+
+Look up or create a global (cross-room) `User` instance by Twitch user ID and/or login.
+
+```javascript
+const user = chat.getUser('99631238', 'xqc');
+// Read-only lookup:
+const user = chat.getUser(null, 'xqc', true);
+```
+
+<ParamField path="id" type="string | number | null">
+  Twitch user ID.
+</ParamField>
+<ParamField path="login" type="string | null">
+  Twitch username (lowercase).
+</ParamField>
+<ParamField path="no_create" type="boolean">
+  When `true`, return `null` instead of creating a new `User`.
+</ParamField>
+
+<ResponseField name="returns" type="User | null">
+  A `User` instance, or `null` if `no_create` is `true` and no user exists.
+</ResponseField>
+
+---
+
+## Events
+
+The Chat module emits the following events that add-ons can listen to via `this.on()`:
+
+| Event | Arguments | Description |
+|---|---|---|
+| `chat:room-add` | `(room: Room)` | A `Room` instance was created. |
+| `chat:room-remove` | `(room: Room)` | A `Room` instance is being destroyed. |
+
+<Tip>
+  Room and user objects also emit events. Subscribe via `room.on(...)` or listen on the module with the namespaced form `chat:room-add`.
+</Tip>
+
+---
+
+## Add-on Lifecycle Pattern
+
+Add-ons should register their tokenizers and providers during `onEnable()` and clean them up during `onDisable()`:
+
+```javascript
+import { Module } from 'utilities/module';
+
+class MyAddon extends Module {
+  constructor(...args) {
+    super(...args);
+    this.inject('chat');
+  }
+
+  onEnable() {
+    this.chat.addTokenizer(this.myTokenizer);
+    this.chat.addLinkProvider(this.myLinkProvider);
+  }
+
+  onDisable() {
+    this.chat.removeTokenizer(this.myTokenizer);
+    this.chat.removeLinkProvider(this.myLinkProvider);
+  }
+}
+```
+
+<Warning>
+  Use your add-on's ID as a namespace prefix in `type` strings (e.g. `my-addon--emotes`). Duplicate types are silently ignored, so conflicts with another add-on or FFZ itself will cause your tokenizer to never run.
+</Warning>

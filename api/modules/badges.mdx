@@ -1,0 +1,264 @@
+---
+title: Badges Module
+description: API reference for the FrankerFaceZ Badges module — registering custom badges, badge data structure, and slot/priority ordering.
+---
+
+The Badges module (`chat.badges`) manages the display of badges next to chat usernames. Add-ons can register custom badge definitions and assign them to users.
+
+Access the module:
+
+```javascript
+const badges = this.resolve('chat.badges');
+```
+
+---
+
+## Badge Definition Object
+
+A badge definition describes how FFZ renders a custom badge:
+
+```javascript
+{
+  id: 2,                       // numeric ID for FFZ-hosted badges, or any unique value
+  name: 'supporter',           // internal slug
+  title: 'FFZ Supporter',      // shown in tooltips
+  slot: 10,                    // display order (lower = further left)
+  addon: true,                 // true for add-on badges, false for FFZ native
+  image: 'https://cdn.example.com/badge/1x.png',
+  urls: {
+    '1': 'https://cdn.example.com/badge/1x.png',
+    '2': 'https://cdn.example.com/badge/2x.png',
+    '4': 'https://cdn.example.com/badge/4x.png'
+  },
+  color: '#ff6600',            // background colour for colour-only badge styles
+  css: '',                     // optional extra CSS injected for this badge
+  click_url: 'https://example.com',  // URL opened on badge click
+  replaces: false,             // true to replace a Twitch badge of the same slot
+  replaces_type: 'moderator',  // which Twitch badge type to replace
+  no_visibility: false         // hide from the Visibility settings panel
+}
+```
+
+### Fields Reference
+
+<ResponseField name="id" type="number | string" required>
+  Unique badge identifier. For add-on badges use a string that includes your add-on ID.
+</ResponseField>
+<ResponseField name="name" type="string">
+  Internal slug. Used for some built-in FFZ logic (e.g. `'bot'` for the unified bot badge).
+</ResponseField>
+<ResponseField name="title" type="string" required>
+  Human-readable label shown in tooltips.
+</ResponseField>
+<ResponseField name="slot" type="number">
+  Controls left-to-right ordering. See [Badge Positions](#badge-positions) for built-in values.
+</ResponseField>
+<ResponseField name="addon" type="boolean | string">
+  `false` for FFZ-native badges, `true` for generic add-on badges, or a string add-on ID to group the badge under that specific add-on in the Visibility panel.
+</ResponseField>
+<ResponseField name="image" type="string">
+  1x image URL fallback.
+</ResponseField>
+<ResponseField name="urls" type="object">
+  Responsive image URLs keyed by scale factor `'1'`, `'2'`, `'4'`.
+</ResponseField>
+<ResponseField name="color" type="string">
+  CSS colour used for colour-only badge styles and tooltip accents.
+</ResponseField>
+<ResponseField name="css" type="string">
+  Raw CSS appended to this badge's auto-generated style rule.
+</ResponseField>
+<ResponseField name="click_url" type="string">
+  URL to open when the badge is clicked (requires `chat.badges.clickable` setting).
+</ResponseField>
+<ResponseField name="click_handler" type="function">
+  Click handler called instead of navigating to `click_url`.
+</ResponseField>
+<ResponseField name="replaces" type="boolean">
+  When `true`, the badge visually replaces the Twitch badge in the same slot.
+</ResponseField>
+<ResponseField name="replaces_type" type="string">
+  Which Twitch badge type this badge replaces (e.g. `'moderator'`).
+</ResponseField>
+<ResponseField name="no_visibility" type="boolean">
+  When `true`, the badge does not appear in the Visibility settings panel.
+</ResponseField>
+
+---
+
+## Badge Positions
+
+FFZ assigns default slot positions to Twitch badge types. Custom badges with a `slot` value between these will appear in the correct order:
+
+| Badge type | Slot |
+|---|---|
+| `staff` | -2 |
+| `admin` / `global_mod` | -1 |
+| `broadcaster` | 0 |
+| `moderator` / `lead_moderator` | 1 |
+| `twitchbot` / `bot-badge` | 2 |
+| `vip` | 3 |
+| Custom badges (recommended) | 10–24 |
+| `subscriber` | 25 |
+
+---
+
+## Registering Badges
+
+### `badges.loadBadgeData(badge_id, data, generate_css?)`
+
+Register or update a badge definition. This is the primary method for add-ons to add custom badges.
+
+```javascript
+badges.loadBadgeData('addon--my-addon--supporter', {
+  id: 'addon--my-addon--supporter',
+  name: 'supporter',
+  title: 'My Add-on Supporter',
+  slot: 10,
+  addon: 'my-addon',          // groups under your add-on in Visibility panel
+  urls: {
+    '1': 'https://cdn.example.com/badges/supporter/1x.png',
+    '2': 'https://cdn.example.com/badges/supporter/2x.png',
+    '4': 'https://cdn.example.com/badges/supporter/4x.png'
+  },
+  color: '#9146ff'
+});
+```
+
+<ParamField path="badge_id" type="string" required>
+  The badge's unique key in the global badge store. Must contain your add-on's ID (e.g. `addon--my-addon--role`).
+</ParamField>
+<ParamField path="data" type="object | null" required>
+  Badge definition object. Pass `null` to clear the badge without removing it from the store.
+</ParamField>
+<ParamField path="generate_css" type="boolean">
+  Rebuild badge CSS after updating. Defaults to `true`. Set to `false` when batch-loading many badges and call `badges.buildBadgeCSS()` manually afterward.
+</ParamField>
+
+### `badges.getBadge(badge_id)`
+
+Look up a badge definition by ID.
+
+```javascript
+const badge = badges.getBadge('addon--my-addon--supporter');
+```
+
+<ResponseField name="returns" type="object | null">
+  The badge definition, or `null` if not found.
+</ResponseField>
+
+### `badges.removeBadge(badge_id, generate_css?)`
+
+Remove a badge definition from the store.
+
+```javascript
+badges.removeBadge('addon--my-addon--supporter');
+```
+
+<ParamField path="badge_id" type="string" required>
+  The badge to remove.
+</ParamField>
+<ParamField path="generate_css" type="boolean">
+  Rebuild CSS after removal. Defaults to `true`.
+</ParamField>
+
+---
+
+## Assigning Badges to Users
+
+Badges are assigned via the `User` object, not directly through the Badges module.
+
+```javascript
+const user = this.chat.getUser(userId, userLogin);
+
+// Add a badge:
+user.addBadge('my-addon', 'addon--my-addon--supporter', {
+  id: 'addon--my-addon--supporter',
+  // optional extra per-user data
+});
+
+// Remove a specific badge:
+user.removeBadge('my-addon', 'addon--my-addon--supporter');
+
+// Remove all badges from this provider:
+user.removeAllBadges('my-addon');
+
+// Read assigned badges:
+const assigned = user.getBadges();  // array of BadgeAssignment objects
+const one = user.getBadge('addon--my-addon--supporter');
+```
+
+<Note>
+  The `provider` string passed to `user.addBadge()` must include your add-on ID. It is used to track ownership and for cleanup when the add-on is unloaded.
+</Note>
+
+---
+
+## Bulk Assigning Badges via `bulk`
+
+For badges shared by many users (e.g. all supporters), FFZ provides a `bulk` Map that avoids allocating per-user objects. This is an advanced pattern:
+
+```javascript
+// key: badge_id, value: Set of Twitch user IDs
+badges.bulk.set('addon--my-addon--supporter', new Set(['12345', '67890']));
+```
+
+FFZ checks this map when rendering each chat message. Entries set here are automatically respected without needing to call `user.addBadge()` for each individual user.
+
+---
+
+## Cleanup on Unload
+
+FFZ automatically removes all badges whose `__source` property matches an unloaded add-on's ID. The `__source` field is set by the dev proxy. You do not need to manually remove badges in `onDisable()` if you registered them through the proxy, but it is good practice:
+
+```javascript
+onDisable() {
+  badges.removeBadge('addon--my-addon--supporter');
+}
+```
+
+---
+
+## Full Example
+
+```javascript
+import { Module } from 'utilities/module';
+
+export default class MyBadgeAddon extends Module {
+  constructor(...args) {
+    super(...args);
+    this.inject('chat');
+    this.injectAs('badges', 'chat.badges');
+  }
+
+  async onEnable() {
+    // 1. Register the badge definition
+    this.badges.loadBadgeData('addon--my-addon--vip', {
+      id: 'addon--my-addon--vip',
+      title: 'My Add-on VIP',
+      slot: 12,
+      addon: 'my-addon',
+      urls: {
+        '1': 'https://cdn.example.com/vip/1x.png',
+        '2': 'https://cdn.example.com/vip/2x.png'
+      },
+      color: '#e005b9'
+    });
+
+    // 2. Fetch which users have it and assign
+    const vipUsers = await fetch('https://api.example.com/vips').then(r => r.json());
+    for (const { id, login } of vipUsers) {
+      const user = this.chat.getUser(id, login);
+      user.addBadge('my-addon', 'addon--my-addon--vip');
+    }
+  }
+
+  onDisable() {
+    this.badges.removeBadge('addon--my-addon--vip');
+  }
+}
+```
+
+<Warning>
+  Badge IDs for add-ons should start with `addon--` followed by your add-on's ID. FFZ uses the prefix to determine the `addon` flag automatically if it is not explicitly set.
+</Warning>

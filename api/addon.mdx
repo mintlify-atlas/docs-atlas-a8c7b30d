@@ -1,0 +1,199 @@
+---
+title: Addon
+description: The Addon class — the root module for every FrankerFaceZ add-on. Extends Module with automatic self-registration and built-in dependency injection.
+---
+
+`Addon` is a specialised subclass of [`Module`](/api/module) that serves as the **entry point** for a FrankerFaceZ add-on. An add-on registers itself with the FFZ module system by calling the static `Addon.register()` method as soon as its script has loaded.
+
+```typescript
+import { Addon } from 'utilities/addon';
+// or
+const { Addon } = FrankerFaceZ.utilities.addon;
+```
+
+---
+
+## Class Definition
+
+```typescript
+export class Addon<
+  TPath extends string = '',
+  TEventMap extends ModuleEvents = ModuleEvents
+> extends Module<TPath, TEventMap>
+```
+
+---
+
+## Static Properties
+
+<ParamField path="Addon.info" type="AddonInfo | undefined">
+  Optional. A static property on your subclass that describes the add-on. When present, it is passed to `AddonManager.addAddon()` during `register()`. If omitted, the add-on is registered with only its ID.
+
+  <Expandable title="AddonInfo fields">
+    <ResponseField name="id" type="string" required>Unique identifier for this add-on.</ResponseField>
+    <ResponseField name="version" type="string" required>Semantic version string (e.g. `"1.0.0"`).</ResponseField>
+    <ResponseField name="name" type="string" required>Human-readable English name.</ResponseField>
+    <ResponseField name="author" type="string" required>Name of the author.</ResponseField>
+    <ResponseField name="description" type="string" required>Description (Markdown supported).</ResponseField>
+    <ResponseField name="created" type="Date" required>Creation date.</ResponseField>
+    <ResponseField name="short_name" type="string">Shortened name for display in compact UI.</ResponseField>
+    <ResponseField name="maintainer" type="string">Current maintainer, if different from author.</ResponseField>
+    <ResponseField name="settings" type="string">Settings UI key — enables a "Settings" button for the add-on.</ResponseField>
+    <ResponseField name="website" type="string">URL for a "Website" button.</ResponseField>
+    <ResponseField name="search_terms" type="string | null">Extra keywords for the add-on search.</ResponseField>
+    <ResponseField name="updated" type="Date">Last updated date.</ResponseField>
+    <ResponseField name="targets" type="string[]">FFZ flavors this add-on supports (`"main"`, `"clips"`, `"player"`).</ResponseField>
+    <ResponseField name="requires" type="string[]">Other add-on IDs this add-on depends on.</ResponseField>
+    <ResponseField name="required_by" type="string[]">Other add-on IDs that depend on this add-on.</ResponseField>
+    <ResponseField name="dev" type="boolean">Set by the system when loaded from a dev center.</ResponseField>
+    <ResponseField name="external" type="boolean">Set by the system when loaded outside FFZ control.</ResponseField>
+    <ResponseField name="load_events" type="string[]">Load tracker events to hold while the add-on loads.</ResponseField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="Addon.version" type="string">
+  Optional static version string. When set before `register()` is called, it is forwarded to `AddonManager.setVersion()`.
+</ParamField>
+
+---
+
+## Constructor
+
+```typescript
+constructor(name?: string, parent?: GenericModule)
+```
+
+In addition to calling `super(name, parent, true)` (which enables add-on ID extraction from the module path), the constructor automatically injects:
+
+- `this.i18n` — `TranslationManager`
+- `this.settings` — `SettingsManager`
+
+These are available once the module has been enabled.
+
+---
+
+## Inherited Properties
+
+The following are automatically populated:
+
+<ParamField path="i18n" type="TranslationManager">
+  Injected reference to the FrankerFaceZ translation manager. Available after the module is enabled.
+</ParamField>
+
+<ParamField path="settings" type="SettingsManager">
+  Injected reference to the FrankerFaceZ settings manager. Available after the module is enabled.
+</ParamField>
+
+---
+
+## Static Methods
+
+### `register()`
+
+```typescript
+static register(
+  id?: string | AddonInfo,
+  info?: AddonInfo,
+  version?: string
+): void
+```
+
+Register this add-on subclass with FFZ. Must be called once your add-on class is ready. FFZ's `AddonManager` will then call `enable()` on the module when the user activates the add-on.
+
+```typescript
+class MyAddon extends Addon {
+  static info = {
+    id: 'my-addon',
+    version: '1.0.0',
+    name: 'My Addon',
+    author: 'You',
+    description: 'Does something cool.',
+    created: new Date('2024-01-01'),
+  };
+
+  async onEnable() {
+    this.log.info('My addon is running!');
+  }
+
+  async onDisable() {
+    this.log.info('My addon stopped.');
+  }
+}
+
+MyAddon.register();
+```
+
+<ParamField path="id" type="string | AddonInfo" optional>
+  The add-on's ID string, or a full `AddonInfo` object. When omitted, the class name is converted to snake_case.
+</ParamField>
+
+<ParamField path="info" type="AddonInfo" optional>
+  Manifest object, used when `id` is a plain string. If omitted, `this.info` (the static property) is used.
+</ParamField>
+
+<ParamField path="version" type="string" optional>
+  Explicit version string. Overrides `Addon.version` when provided.
+</ParamField>
+
+#### Behaviour
+
+1. Determines the add-on ID from arguments, the class name, or throws.
+2. Calls `addons.addAddon(info)` to register the manifest with `AddonManager`.
+3. Calls `ffz.register('addon.<id>', this)` to mount the add-on into the module tree at `addon.<id>`.
+4. If a module is already registered at that path, it sets `external = true` on it (indicating the add-on was loaded outside FFZ's control) and re-throws the collision error.
+
+<Note>
+  Add-ons built from the official FFZ add-ons repository have `register()` called for them automatically. You only need to call it manually when distributing a standalone script.
+</Note>
+
+---
+
+## Deprecated Methods
+
+### `populate()` <span style={{color: 'var(--colors-orange-9)'}}>(deprecated)</span>
+
+```typescript
+populate(
+  ctx: __WebpackModuleApi.RequireContext,
+  log?: Logger
+): Promise<Record<string, GenericModule>>
+```
+
+This is a renamed alias for [`loadFromContext()`](/api/module#loadfromcontext). The name `populate` is deprecated — use `loadFromContext` instead.
+
+---
+
+## Full Example
+
+```typescript
+import { Addon } from 'utilities/addon';
+
+class CoolAddon extends Addon<'addon.cool-addon'> {
+
+  static info = {
+    id: 'cool-addon',
+    version: '2.0.0',
+    name: 'Cool Addon',
+    author: 'A Developer',
+    description: 'Adds cool things to Twitch.',
+    created: new Date('2023-06-01'),
+    settings: 'add_ons.cool-addon',
+  };
+
+  // Injected by Addon base constructor:
+  // this.i18n: TranslationManager
+  // this.settings: SettingsManager
+
+  async onEnable() {
+    // Register child modules from webpack context
+    const ctx = require.context('./modules', true, /index\.[jt]sx?$/);
+    await this.loadFromContext(ctx);
+  }
+
+  async onDisable() {
+    // cleanup
+  }
+}
+
+CoolAddon.register();
+```

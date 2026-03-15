@@ -1,0 +1,186 @@
+---
+title: "Installation"
+description: "Install FrankerFaceZ as an end user, or set up the local development environment to build and hack on FFZ core."
+---
+
+<Tabs>
+  <Tab title="End-user install">
+    ## Install FrankerFaceZ
+
+    FrankerFaceZ is distributed as a browser extension and as a userscript. Choose whichever method suits your browser.
+
+    ### Browser extension
+
+    The extension is the recommended installation method. It installs with a single click and updates automatically.
+
+    <CardGroup cols={2}>
+      <Card title="Chrome / Edge / Brave" icon="chrome" href="https://chrome.google.com/webstore/detail/frankerfacez/ohplhdohphhbfhhbfohbncaiihaeeifm">
+        Install from the Chrome Web Store.
+      </Card>
+      <Card title="Firefox" icon="firefox" href="https://addons.mozilla.org/en-US/firefox/addon/frankerfacez/">
+        Install from Mozilla Add-ons.
+      </Card>
+    </CardGroup>
+
+    After installing, navigate to any Twitch page and look for the FFZ icon in your browser toolbar to confirm it is active.
+
+    ### Userscript
+
+    The userscript version is useful when the extension is unavailable or when you want to run a custom build from a local development server.
+
+    <Steps>
+      <Step title="Install a userscript manager">
+        Install [Tampermonkey](https://www.tampermonkey.net/) (Chrome, Edge, Firefox, Safari) or [Violentmonkey](https://violentmonkey.github.io/) (Chrome, Firefox).
+      </Step>
+      <Step title="Install the FFZ userscript">
+        Visit the FrankerFaceZ website and click the userscript install link. Your userscript manager will prompt you to confirm the installation.
+      </Step>
+      <Step title="Reload Twitch">
+        Navigate to Twitch and reload the page. FFZ will initialise automatically.
+      </Step>
+    </Steps>
+
+    <Note>
+      The userscript version is also the version you will use during **add-on development**, because it can be pointed at a local development server. See the **Dev environment** tab for details.
+    </Note>
+  </Tab>
+
+  <Tab title="Dev environment">
+    ## Set up the development environment
+
+    This section covers cloning and running the FFZ source, for contributors or add-on developers who need the local dev server.
+
+    ### Prerequisites
+
+    - [Node.js](https://nodejs.org/) (LTS release recommended)
+    - [pnpm](https://pnpm.io/) package manager
+
+    Install pnpm if you do not have it:
+
+    ```bash
+    npm install -g pnpm
+    ```
+
+    ### Clone and install
+
+    <Steps>
+      <Step title="Clone the repository">
+        ```bash
+        git clone https://github.com/FrankerFaceZ/FrankerFaceZ.git
+        cd FrankerFaceZ
+        ```
+      </Step>
+
+      <Step title="Install dependencies">
+        ```bash
+        pnpm install
+        ```
+
+        This installs all build tools, webpack, TypeScript, Vue, and the full dependency tree.
+      </Step>
+
+      <Step title="Start the development server">
+        ```bash
+        pnpm start
+        ```
+
+        This runs `webpack serve` in development mode. The server listens on **port 8000** over HTTPS and serves locally-built files, falling back to the CDN for anything that has not been built locally.
+
+        <Warning>
+          The dev server uses a self-signed certificate. You must tell your browser to accept the certificate for `localhost` before FFZ can load from it. Visit `https://localhost:8000` directly and click through the security warning once.
+        </Warning>
+      </Step>
+
+      <Step title="Enable debug mode on Twitch">
+        Open Twitch in your browser, open the developer console, and run:
+
+        ```javascript
+        localStorage.ffzDebugMode = true;
+        ```
+
+        Reload the page. FFZ (via the userscript) will now load its assets from `https://localhost:8000` instead of the CDN.
+
+        <Tip>
+          You only need to set `ffzDebugMode` once — it persists in `localStorage`.
+        </Tip>
+      </Step>
+    </Steps>
+
+    ### Build commands
+
+    | Command | Description |
+    |---|---|
+    | `pnpm start` | Start the webpack dev server with watch mode (development build). |
+    | `pnpm build` | Production build to `dist/`. Equivalent to `pnpm build:prod`. |
+    | `pnpm build:dev` | Development build to `dist/` without the dev server. |
+    | `pnpm build:ext` | Production build of the browser **extension** variant. |
+    | `pnpm build:types` | Emit TypeScript declaration files to `typedist/`. |
+    | `pnpm build:docs` | Generate TypeDoc API reference. |
+    | `pnpm clean` | Remove the `dist/` output directory. |
+
+    ### Editor setup
+
+    FFZ uses **tabs** for indentation and **LF** (`\n`) line endings. Configure your editor accordingly.
+
+    <CodeGroup>
+      ```json VS Code settings.json
+      {
+        "editor.insertSpaces": false,
+        "files.eol": "\n",
+        "eslint.validate": [
+          "javascript",
+          "javascriptreact",
+          "vue"
+        ]
+      }
+      ```
+    </CodeGroup>
+
+    Install the ESLint extension and the Vue extension for VS Code for in-editor linting and syntax highlighting.
+
+    ### Icon font
+
+    FFZ ships a custom icon font managed via Fontello. To edit the font:
+
+    ```bash
+    pnpm font
+    ```
+
+    This opens a Fontello session in your browser. After editing, if the dev server is running, click Fontello's **Export** button to save changes automatically. Otherwise:
+
+    ```bash
+    pnpm font:save
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Verify your install
+
+Regardless of installation method, open Twitch and check the browser console for a line like:
+
+```
+[FFZ] frankerfacez: Initialization complete in 123.45678ms.
+```
+
+You can also retrieve the running instance from the console at any time:
+
+```javascript
+window.ffz                        // the FrankerFaceZ instance
+window.FrankerFaceZ.get()         // same thing
+window.FrankerFaceZ.utilities     // all exported utility modules
+```
+
+---
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build a minimal working add-on from scratch.
+  </Card>
+  <Card title="Contributing" icon="github" href="/contributing/setup">
+    Contribute to FFZ core — build pipeline, editor settings, and workflow.
+  </Card>
+</CardGroup>

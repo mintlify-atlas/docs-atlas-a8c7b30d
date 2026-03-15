@@ -1,0 +1,75 @@
+---
+title: Add-on Overview
+description: What add-ons are, how they fit into FrankerFaceZ, and the add-on ecosystem.
+---
+
+FrankerFaceZ is built around a modular architecture. Every major feature — chat rendering, emotes, badges, settings — lives in its own **module**. Add-ons extend that same system: they are first-class modules that load into FFZ at runtime and can interact with any other module in the tree.
+
+## What is an add-on?
+
+An add-on is a JavaScript bundle (typically built with webpack) that exports a class extending `Addon`. When FFZ loads your bundle, your class is registered under the path `addon.<your-id>` in the global module tree. From that point on your add-on participates in the same lifecycle — load, enable, disable, unload — as every other FFZ module.
+
+Add-ons can:
+
+- Define their own settings that appear in the FFZ control center
+- Register chat tokenizers, custom badges, and emote sets
+- Inject and interact with any core FFZ module (`settings`, `chat`, `chat.emotes`, `chat.badges`, etc.)
+- Add localization strings through the `i18n` module
+- Emit and listen to events across the entire module tree
+
+## The add-on ecosystem
+
+The official add-ons are hosted in the [FrankerFaceZ Add-Ons repository](https://github.com/FrankerFaceZ/Add-Ons). Add-ons listed there are:
+
+- Automatically discovered by FFZ and shown in the **Add-Ons** panel of the control center
+- Loaded on demand when a user enables them
+- Versioned and served via the FFZ CDN
+
+You can also load an add-on from a **local development server** (port 8001 by default) by enabling the _Use Local Development Server_ setting found at **Add-Ons >> Development** in the control center. This lets you iterate quickly without publishing.
+
+## How add-ons fit into FFZ
+
+```
+FrankerFaceZ (root)
+├── settings
+├── i18n
+├── chat
+│   ├── chat.emotes
+│   ├── chat.badges
+│   └── chat.emoji
+├── addons          ← AddonManager
+│   ├── addon.my-addon   ← your Addon class instance
+│   └── addon.other-addon
+└── site
+    └── ...
+```
+
+The `AddonManager` (`addons.ts`) is responsible for fetching the list of available add-ons, loading their scripts, and calling `enable()` on each registered `Addon` instance when the user has opted in.
+
+## Add-on identity
+
+Every add-on is identified by a string **ID** (e.g. `my-addon`). This ID:
+
+- Becomes the module path: `addon.my-addon`
+- Should be used as a namespace prefix for all settings keys (`my-addon.some-setting`)
+- Should be used as a prefix for badge IDs, emote set IDs, and other named resources you register
+
+Keeping everything namespaced prevents collisions with other add-ons or with FFZ itself.
+
+<CardGroup cols={2}>
+  <Card title="Getting Started" icon="rocket" href="/addons/getting-started">
+    Build and register your first add-on from scratch.
+  </Card>
+  <Card title="Addon Class API" icon="code" href="/addons/addon-class">
+    Full reference for the Addon class, static info, and register().
+  </Card>
+  <Card title="Module Lifecycle" icon="rotate" href="/addons/module-lifecycle">
+    Understand onLoad, onEnable, onDisable, and onUnload.
+  </Card>
+  <Card title="Settings API" icon="sliders" href="/addons/settings-api">
+    Define, read, and react to settings changes.
+  </Card>
+  <Card title="Chat Integration" icon="comments" href="/addons/chat-integration">
+    Register tokenizers, badges, and emote sets.
+  </Card>
+</CardGroup>

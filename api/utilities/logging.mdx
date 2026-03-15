@@ -1,0 +1,222 @@
+---
+title: Logger
+description: API reference for the FrankerFaceZ Logger utility — log levels, child loggers, error capture, and init buffering.
+---
+
+## Overview
+
+`Logger` is the internal logging utility used throughout FrankerFaceZ. Every `Module` receives a pre-configured child logger at `this.log`. All output is styled in the browser console with the FFZ brand color and the logger's dotted path name.
+
+```typescript
+import Logger, { LogLevel } from 'utilities/logging';
+```
+
+---
+
+## Log levels
+
+Levels are defined in the `LogLevel` enum (numeric, ascending severity).
+
+| Constant | Value | Console method |
+|---|---|---|
+| `LogLevel.Verbose` | `0` | `console.debug` |
+| `LogLevel.Debug` | `1` | `console.debug` |
+| `LogLevel.Info` | `2` | `console.info` |
+| `LogLevel.Warning` | `4` | `console.warn` |
+| `LogLevel.Error` | `8` | `console.error` |
+| `LogLevel.Off` | `99` | *(suppressed)* |
+
+The active level is read from `localStorage.ffzLogLevel` at startup. Messages below the active level are silently dropped.
+
+Static aliases are available directly on the class:
+
+```typescript
+Logger.VERBOSE  // 0
+Logger.DEBUG    // 1
+Logger.INFO     // 2
+Logger.WARN     // 4
+Logger.WARNING  // 4  (alias)
+Logger.ERROR    // 8
+Logger.OFF      // 99
+Logger.DEFAULT_LEVEL  // LogLevel.Info
+```
+
+---
+
+## Constructor
+
+```typescript
+new Logger(
+  parent: Logger | null,
+  name: string | null,
+  level?: LogLevel | null,
+  raven?: any
+)
+```
+
+<ParamField path="parent" type="Logger | null" required>
+  Parent logger. The root logger has `parent = null`.
+</ParamField>
+<ParamField path="name" type="string | null" required>
+  Name segment appended to the parent's dotted path, e.g. `"chat"` → displayed as `FFZ [chat]`.
+</ParamField>
+<ParamField path="level" type="LogLevel">
+  Initial log level. Inherits from parent when omitted.
+</ParamField>
+<ParamField path="raven" type="any">
+  Sentry/Raven client for automatic error capture. Inherited from parent when omitted.
+</ParamField>
+
+---
+
+## Instance properties
+
+<ResponseField name="name" type="string | null">
+  Full dotted path name of this logger, e.g. `"chat.emotes"`.
+</ResponseField>
+<ResponseField name="level" type="LogLevel">
+  Minimum level at which messages are emitted.
+</ResponseField>
+<ResponseField name="enabled" type="boolean">
+  When `false`, all output is suppressed regardless of level.
+</ResponseField>
+<ResponseField name="root" type="Logger">
+  Reference to the root logger.
+</ResponseField>
+<ResponseField name="parent" type="Logger | null">
+  Parent logger, or `null` for the root.
+</ResponseField>
+<ResponseField name="children" type="Record<string, Logger>">
+  Map of child loggers created via `get()`.
+</ResponseField>
+<ResponseField name="captured_init" type="InitItem[] | undefined">
+  Available only on the root logger. Buffer of log messages emitted before the FFZ boot sequence completes. Each item has `{ time, category, message, level }`.
+</ResponseField>
+
+---
+
+## Creating child loggers
+
+### `log.get(name, level?)`
+
+Returns a child `Logger` for the given name segment, creating it if it does not already exist. Child loggers inherit the parent's level and Raven client.
+
+```typescript
+log.get(name: string, level?: LogLevel): Logger
+```
+
+```typescript
+// Inside a module
+const chatLog = this.log.get('chat');
+chatLog.info('Chat module initialised');
+// → FFZ [my-module.chat]: Chat module initialised
+```
+
+<Note>
+  Each module's `this.log` is already a pre-created child logger named after the module. You only need `get()` to create further sub-loggers.
+</Note>
+
+---
+
+## Logging methods
+
+All methods accept the same variadic signature:
+
+```typescript
+log.verbose(message: any, ...optionalParams: any[]): void
+log.debug(message: any, ...optionalParams: any[]): void
+log.info(message: any, ...optionalParams: any[]): void
+log.warn(message: any, ...optionalParams: any[]): void
+log.warning(message: any, ...optionalParams: any[]): void  // alias for warn
+log.error(message: any, ...optionalParams: any[]): void
+```
+
+`optionalParams` are passed directly to the underlying `console` method, so objects and errors are inspectable in DevTools.
+
+```typescript
+this.log.info('Loaded', count, 'emotes');
+this.log.warn('Unexpected response', response);
+this.log.error('Failed to parse config', err);
+```
+
+---
+
+## Styled (color) variants
+
+Every level also has a `*Color` variant that accepts an array of CSS strings inserted into the message via `%c` format specifiers:
+
+```typescript
+log.infoColor(message: any, colors: string[], ...optionalParams: any[]): void
+log.debugColor(message: any, colors: string[], ...optionalParams: any[]): void
+log.warnColor(message: any, colors: string[], ...optionalParams: any[]): void
+log.errorColor(message: any, colors: string[], ...optionalParams: any[]): void
+```
+
+---
+
+## Error capture
+
+### `log.capture(exc, opts?, ...args)`
+
+Reports an exception to the configured Raven/Sentry client. When `args` are provided, also calls `log.error()` with those arguments.
+
+```typescript
+log.capture(
+  exc: Error,
+  opts?: object,   // Raven captureException options (e.g. { extra: {...} })
+  ...args: any[]   // if provided, passed to log.error()
+): void
+```
+
+```typescript
+try {
+  riskyOperation();
+} catch (err) {
+  this.log.capture(err, { extra: { context: 'startup' } }, 'riskyOperation failed', err);
+}
+```
+
+---
+
+### `log.crumb(...args)`
+
+Records a breadcrumb via Raven's `captureBreadcrumb` for richer error reports.
+
+```typescript
+log.crumb(...args: any[]): void
+```
+
+---
+
+## Init buffering
+
+The root logger captures all messages above `Verbose` level into `root.captured_init` before the FFZ core signals readiness (sets `root.init = true`). This buffer is sent to Raven as additional context with the first captured exception, giving full startup context even for errors that occur very early in the boot process.
+
+```typescript
+type InitItem = {
+  time: number;        // Date.now()
+  category: string | null; // logger name
+  message: string;
+  level: string | number;  // 'debug' | 'info' | 'warn' | 'error'
+};
+```
+
+---
+
+## Usage in modules
+
+```typescript
+export default class MyModule extends Module {
+  onEnable() {
+    // this.log is a Logger child pre-named after this module
+    this.log.info('Module enabled');
+
+    const sub = this.log.get('sub-system');
+    sub.debug('Starting sub-system');
+  }
+}
+```
+
+<Tip>
+  Set `localStorage.ffzLogLevel = 'DEBUG'` (or `'0'`) in the browser console and reload to see verbose output during development.
+</Tip>

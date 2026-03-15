@@ -1,0 +1,256 @@
+---
+title: Emotes Module
+description: API reference for the FrankerFaceZ Emotes module — emote sets, global/channel emote registration, and set lifecycle management.
+---
+
+The Emotes module (`chat.emotes`) manages every emote set known to FrankerFaceZ: global sets visible to everyone, per-channel sets, and per-user sets. Add-ons use it to register custom emotes that appear alongside the built-in FFZ and Twitch emotes.
+
+Access the module from an add-on:
+
+```javascript
+const emotes = this.resolve('chat.emotes');
+// or, from a module with the chat parent injected:
+const emotes = this.chat.emotes;
+```
+
+---
+
+## Emote Set Object
+
+An emote set is a plain object describing a collection of emotes:
+
+```javascript
+{
+  id: 'my-addon--global',          // string, must include addon ID
+  title: 'My Add-on Emotes',       // display name
+  source: 'My Add-on',             // shown in emote tooltips
+  icon: 'https://example.com/icon.png',
+  emotes: [
+    {
+      id: 12345,                   // numeric or string ID, unique within the set
+      name: 'myEmote',             // the text users type to trigger it
+      urls: {
+        '1': 'https://cdn.example.com/emote/1x.png',
+        '2': 'https://cdn.example.com/emote/2x.png',
+        '4': 'https://cdn.example.com/emote/4x.png'
+      },
+      width: 28,
+      height: 28,
+      modifier: false,             // true if this is a modifier emote
+      hidden: false
+    }
+  ]
+}
+```
+
+### Emote Object Fields
+
+<ResponseField name="id" type="number | string" required>
+  Unique identifier for this emote within its set.
+</ResponseField>
+<ResponseField name="name" type="string" required>
+  The trigger word displayed in chat (e.g. `"OMEGALUL"`).
+</ResponseField>
+<ResponseField name="urls" type="object" required>
+  Image URLs keyed by scale factor: `'1'`, `'2'`, and optionally `'4'`.
+</ResponseField>
+<ResponseField name="width" type="number">
+  Natural width in pixels at 1x.
+</ResponseField>
+<ResponseField name="height" type="number">
+  Natural height in pixels at 1x.
+</ResponseField>
+<ResponseField name="modifier" type="boolean">
+  When `true`, the emote acts as a modifier that overlays or transforms adjacent emotes.
+</ResponseField>
+<ResponseField name="modifier_offset" type="string">
+  CSS margin shorthand for modifier positioning, e.g. `"0 -10px 0 0"`.
+</ResponseField>
+<ResponseField name="hidden" type="boolean">
+  When `true`, the emote is known but not shown in pickers or suggestions.
+</ResponseField>
+<ResponseField name="css" type="string">
+  Extra raw CSS injected for this emote's element.
+</ResponseField>
+
+---
+
+## Default Sets (Global Emotes)
+
+Default sets are available to every user in every channel — equivalent to global emotes.
+
+### `emotes.addDefaultSet(provider, set_id, data?)`
+
+Register a set as globally available under the given provider key.
+
+```javascript
+const SET_ID = 'my-addon--global';
+
+emotes.addDefaultSet('my-addon', SET_ID, {
+  id: SET_ID,
+  title: 'My Add-on Global Emotes',
+  emotes: [
+    {
+      id: 1,
+      name: 'myKEK',
+      urls: { '1': 'https://cdn.example.com/mykek/1x.png' }
+    }
+  ]
+});
+```
+
+<ParamField path="provider" type="string" required>
+  A provider key that includes your add-on's ID. Must be pre-registered with `emotes.setProvider()` in development mode or it will log a warning. Example: `'my-addon'`.
+</ParamField>
+<ParamField path="set_id" type="string | number" required>
+  The set identifier. Must contain your add-on's ID to pass the dev-mode check.
+</ParamField>
+<ParamField path="data" type="object">
+  Optional emote set data to load immediately. If omitted, call `emotes.loadSetData()` separately.
+</ParamField>
+
+<ResponseField name="returns" type="boolean">
+  `true` if the set was newly added, `false` if it was already present.
+</ResponseField>
+
+### `emotes.removeDefaultSet(provider, set_id?)`
+
+Unregister a default set. Omit `set_id` to remove all sets registered under `provider`.
+
+```javascript
+emotes.removeDefaultSet('my-addon', 'my-addon--global');
+// Remove all sets from this provider:
+emotes.removeDefaultSet('my-addon');
+```
+
+<ResponseField name="returns" type="boolean">
+  `true` if the set was removed, `false` if it was not found.
+</ResponseField>
+
+---
+
+## Set Data Lifecycle
+
+### `emotes.loadSetData(set_id, data, suppress_log?)`
+
+Load or update the emote data for a set. Called automatically when `data` is passed to `addDefaultSet()`, but can be called separately to update a set's contents.
+
+```javascript
+emotes.loadSetData('my-addon--global', {
+  id: 'my-addon--global',
+  title: 'My Add-on Global Emotes',
+  emotes: [ /* ... */ ]
+});
+```
+
+Passing `null` as `data` clears the set.
+
+<ParamField path="set_id" type="string" required>
+  The set to update.
+</ParamField>
+<ParamField path="data" type="object | null" required>
+  The new set data, or `null` to unload.
+</ParamField>
+<ParamField path="suppress_log" type="boolean">
+  Suppress the info-level log message. Defaults to `false`.
+</ParamField>
+
+### `emotes.refSet(set_id)` / `emotes.unrefSet(set_id)`
+
+Reference-count a set. FFZ automatically unloads sets when their reference count drops to zero (with a 5-second grace period). You rarely need to call these directly — `addDefaultSet` and the `Room`/`User` methods manage refs for you.
+
+---
+
+## Channel (Room) Emote Sets
+
+To add emotes for a specific channel, get the `Room` object from the Chat module and call `addSet` on it:
+
+```javascript
+const room = this.chat.getRoom(null, 'channelname');
+if (room) {
+  room.addSet('my-addon', 'my-addon--channel-123', {
+    id: 'my-addon--channel-123',
+    title: 'Channel Emotes',
+    emotes: [ /* ... */ ]
+  });
+}
+```
+
+Listen to the `chat:room-add` event to add sets to rooms as they are created:
+
+```javascript
+this.on('chat:room-add', room => {
+  const setData = this.getEmotesForRoom(room.login);
+  if (setData) {
+    room.addSet('my-addon', `my-addon--${room.id}`, setData);
+  }
+});
+```
+
+---
+
+## Per-User Emote Sets
+
+Assign emotes to a specific user (e.g. subscriber rewards):
+
+```javascript
+const user = this.chat.getUser(userId, userLogin);
+user.addSet('my-addon', 'my-addon--user-set', setData);
+
+// Later:
+user.removeSet('my-addon', 'my-addon--user-set');
+user.removeAllSets('my-addon');
+```
+
+---
+
+## Emote Set Events
+
+| Event | Arguments | Description |
+|---|---|---|
+| `chat.emotes:loaded` | `(set_id, data)` | Emitted after `loadSetData` completes. |
+| `chat.emotes:unloaded` | `(set_id, data)` | Emitted when a set is unloaded from memory. |
+| `chat.emotes:update-default-sets` | `(provider, set_id, added)` | Emitted when a default set is added or removed. |
+| `chat.emotes:update-sub-sets` | `(provider, set_id, added)` | Emitted when a subscriber set changes. |
+
+---
+
+## Full Add-on Example
+
+```javascript
+import { Module } from 'utilities/module';
+
+export default class MyEmoteProvider extends Module {
+  constructor(...args) {
+    super(...args);
+    this.inject('chat');
+    this.injectAs('emotes', 'chat.emotes');
+  }
+
+  async onEnable() {
+    const data = await fetch('https://api.example.com/emotes').then(r => r.json());
+
+    this.emotes.addDefaultSet('my-addon', 'my-addon--global', {
+      id: 'my-addon--global',
+      title: 'Example Emotes',
+      emotes: data.emotes
+    });
+
+    this.on('chat:room-add', this.roomAdded, this);
+  }
+
+  onDisable() {
+    this.emotes.removeDefaultSet('my-addon');
+    this.off('chat:room-add', this.roomAdded, this);
+  }
+
+  roomAdded(room) {
+    const setId = `my-addon--room-${room.id}`;
+    // fetch and add per-room emotes
+  }
+}
+```
+
+<Warning>
+  Set IDs and provider keys must include your add-on's ID. Dev-mode checks will warn if they do not. This prevents collisions between add-ons and FFZ's own sets.
+</Warning>

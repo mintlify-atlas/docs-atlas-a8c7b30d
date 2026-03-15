@@ -1,0 +1,135 @@
+---
+title: "Introduction"
+description: "FrankerFaceZ is a Twitch enhancement suite and add-on framework that has powered custom emotes, UI customization, and third-party extensions on Twitch since 2013."
+---
+
+## What is FrankerFaceZ?
+
+FrankerFaceZ (FFZ) is a browser extension and userscript that enhances Twitch with custom emotes, a flexible settings system, and a full-featured add-on framework. Third-party developers can build add-ons that hook directly into the same module tree that FFZ itself uses — with access to settings, chat rendering, badges, emotes, and more.
+
+FFZ is open source under the Apache 2.0 license. The current version is **4.81.0**.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build a minimal working add-on from scratch in a few minutes.
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Install FFZ as an end user or set up the developer environment.
+  </Card>
+  <Card title="Module system" icon="sitemap" href="/concepts/module-system">
+    Learn how modules load, enable, inject dependencies, and emit events.
+  </Card>
+  <Card title="Add-on class" icon="puzzle-piece" href="/addons/addon-class">
+    The `Addon` subclass and the `register()` entry point for add-ons.
+  </Card>
+</CardGroup>
+
+---
+
+## Architecture overview
+
+FFZ is structured as a tree of **modules**. Every subsystem — chat, emotes, settings, i18n, the add-on manager — is a `Module` instance mounted at a named path in a shared registry. Add-ons are mounted under the `addon.<id>` path namespace and participate in the same lifecycle.
+
+```
+FrankerFaceZ (root)
+├── settings          SettingsManager
+├── experiments       ExperimentManager
+├── i18n              TranslationManager
+├── socket            SocketClient
+├── pubsub            PubSubClient
+├── site              Site
+│   └── ...           (chat, player, player-bar, ...)
+└── addons            AddonManager
+    ├── addon.my-addon  MyAddon       ← your add-on
+    └── addon.other     OtherAddon
+```
+
+Every node in the tree is an instance of [`Module`](/api/module). Modules declare their dependencies with `inject()` or `requires`, and FFZ ensures they are enabled in the correct order before calling `onEnable()`.
+
+### Key subsystems
+
+<CardGroup cols={2}>
+  <Card title="Module system" icon="sitemap">
+    Handles load/enable/disable/unload lifecycle, dependency resolution, cyclic dependency detection, and lazy loading.
+  </Card>
+  <Card title="Settings engine" icon="sliders">
+    Profile-based settings with multiple storage providers, context-aware evaluation, and live change events.
+  </Card>
+  <Card title="Add-on manager" icon="plug">
+    Discovers, fetches, and registers third-party add-ons. Exposes `AddonManager` at `addons` in the module tree.
+  </Card>
+  <Card title="Translation (i18n)" icon="language">
+    Full ICU message-format internationalization. Add-ons can register their own translation keys.
+  </Card>
+  <Card title="Site integration" icon="twitch">
+    The `site` module tree wraps Twitch's React components and provides stable hooks for chat, the player, and navigation.
+  </Card>
+  <Card title="Utilities" icon="wrench">
+    A rich set of exported utility modules: `dom`, `color`, `filtering`, `graphql`, `logging`, `time`, and more — all accessible at `FrankerFaceZ.utilities`.
+  </Card>
+</CardGroup>
+
+---
+
+## Public API surface
+
+Once FFZ is loaded, two globals are available on every Twitch page:
+
+| Global | Type | Description |
+|---|---|---|
+| `window.ffz` | `FrankerFaceZ` | The running FFZ instance. |
+| `window.FrankerFaceZ` | `typeof FrankerFaceZ` | The class itself, exposing `FrankerFaceZ.get()` and `FrankerFaceZ.utilities`. |
+
+Add-ons access the instance indirectly through `Addon.register()`, which calls `window.FrankerFaceZ.get()` internally:
+
+```typescript
+// src/utilities/addon.ts
+static register(id?: string | AddonInfo, info?: AddonInfo, version?: string) {
+  // ...
+  const ffz = window.FrankerFaceZ.get();
+  ffz.register(`addon.${id}`, this);
+}
+```
+
+`FrankerFaceZ.utilities` is a namespace object exposing every utility module for add-on authors:
+
+```typescript
+// src/main.ts
+static utilities = {
+  addon:      Utility_Addons,
+  blobs:      Utility_Blobs,
+  color:      Utility_Color,
+  constants:  Utility_Constants,
+  dialog:     Utility_Dialog,
+  dom:        Utility_DOM,
+  events:     Utility_Events,
+  fontAwesome: Utility_FontAwesome,
+  graphql:    Utility_GraphQL,
+  logging:    Utility_Logging,
+  module:     Utility_Module,
+  object:     Utility_Object,
+  time:       Utility_Time,
+  tooltip:    Utility_Tooltip,
+  i18n:       Utility_I18n,
+  filtering:  Utility_Filtering
+};
+```
+
+---
+
+## Further reading
+
+<CardGroup cols={2}>
+  <Card title="Core concepts" icon="book" href="/concepts/architecture">
+    Deep dive into the architecture, module lifecycle, and settings system.
+  </Card>
+  <Card title="Add-on development" icon="code" href="/addons/overview">
+    Everything you need to build, test, and distribute an FFZ add-on.
+  </Card>
+  <Card title="API reference" icon="brackets-curly" href="/api/frankerfacez">
+    Full TypeScript API docs for every public class and method.
+  </Card>
+  <Card title="Contributing" icon="github" href="/contributing/setup">
+    Set up the development environment and contribute to FFZ core.
+  </Card>
+</CardGroup>

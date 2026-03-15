@@ -1,0 +1,259 @@
+---
+title: Settings API
+description: How add-ons define settings, read values, write values, and react to changes using the FFZ settings system.
+---
+
+The `SettingsManager` (`src/settings/index.ts`) is the central settings system for FFZ. Add-ons interact with it through `this.settings`, which is automatically injected into every `Addon` instance.
+
+The settings system is profile-aware: a user can have multiple settings profiles (e.g., per-channel overrides) and the value returned by `this.settings.get()` reflects the active profile's value.
+
+## Defining a setting
+
+Use `this.settings.add(key, definition)` to register a setting. Call this in `onEnable()`.
+
+```javascript
+async onEnable() {
+  this.settings.add('my-addon.show-overlay', {
+    // The value returned when no profile has explicitly set this key.
+    default: true,
+
+    // Optional: how the value is stored and processed.
+    // Omit for simple value types.
+    // type: 'basic_array_merge',
+
+    // The UI definition controls how the setting appears in the control center.
+    ui: {
+      // Navigation path. Segments are separated by ' > ' or ' >> '.
+      // The top-level 'Add-Ons' segment groups add-on settings together.
+      path: 'Add-Ons >> My Add-on',
+
+      // Label shown next to the control.
+      title: 'Show overlay in chat',
+
+      // Optional longer description (supports Markdown).
+      description: 'When enabled, displays a small overlay on chat messages.',
+
+      // The Vue component used to render the control.
+      component: 'setting-check-box',
+    },
+  });
+}
+```
+
+### Common `component` values
+
+| Component | Use for |
+|---|---|
+| `setting-check-box` | Boolean toggle |
+| `setting-select-box` | Enum/dropdown |
+| `setting-text-box` | Free-form string or number |
+| `setting-combo-box` | Select with custom entry |
+| `setting-color-box` | Color picker |
+
+### Setting definition fields
+
+<ParamField path="default" type="any" required>
+  The value to return when no profile explicitly sets this key.
+</ParamField>
+
+<ParamField path="ui.path" type="string">
+  Navigation path in the control center. Separate levels with ` > ` (subcategory) or ` >> ` (sub-group within a category). Example: `'Add-Ons >> My Add-on'` or `'Chat > Appearance >> General'`.
+</ParamField>
+
+<ParamField path="ui.title" type="string">
+  Label shown next to the UI control.
+</ParamField>
+
+<ParamField path="ui.description" type="string">
+  Longer description rendered below the title. Supports Markdown.
+</ParamField>
+
+<ParamField path="ui.component" type="string">
+  The Vue component used to render the control in the settings UI.
+</ParamField>
+
+<ParamField path="ui.data" type="array | function">
+  For `setting-select-box` and `setting-combo-box`: the list of `{value, title}` option objects, or a function that returns that list.
+</ParamField>
+
+<ParamField path="ui.process" type="string">
+  A named post-processor applied to the text-box value. Common values: `'to_int'`, `'to_float'`.
+</ParamField>
+
+<ParamField path="ui.bounds" type="number[]">
+  For numeric text boxes: `[min]` or `[min, max]`.
+</ParamField>
+
+<ParamField path="changed" type="function">
+  A shorthand callback that is called immediately when the setting's value changes. Equivalent to calling `this.settings.on(':changed:my-key', fn)` after adding the setting.
+</ParamField>
+
+## Reading a setting value
+
+```javascript
+const show = this.settings.get('my-addon.show-overlay');
+// Returns the value from the currently active profile, or the default.
+```
+
+`get()` reads from the **main context** — the merged result of all active profiles. The return type matches the setting's value type.
+
+## Writing a setting value
+
+Settings are stored in profiles; you don't write to them directly via the API. The user changes them through the UI. If you need to programmatically set a value in the current profile for testing:
+
+```javascript
+// Advanced: set on the provider directly (not recommended for production code)
+this.settings.provider.set('my-addon.show-overlay', false);
+```
+
+## Reacting to changes
+
+There are two ways to listen for setting changes:
+
+### Using `settings.on(':changed:<key>')`
+
+Listen for changes to a specific key on the `SettingsManager` event emitter:
+
+```javascript
+async onEnable() {
+  this.settings.add('my-addon.font-size', {
+    default: 14,
+    ui: {
+      path: 'Add-Ons >> My Add-on',
+      title: 'Font size',
+      component: 'setting-text-box',
+      process: 'to_int',
+      bounds: [8, 48],
+    },
+  });
+
+  // Called every time the value changes.
+  // The context (this) defaults to the module instance.
+  this.settings.on(':changed:my-addon.font-size', (newValue, oldValue) => {
+    this.log.info(`Font size changed from ${oldValue} to ${newValue}`);
+    this._applyFontSize(newValue);
+  }, this);
+}
+
+async onDisable() {
+  this.settings.off(':changed:my-addon.font-size', null, this);
+}
+```
+
+### Using `settings.getChanges(key, fn)`
+
+`getChanges` calls `fn` **immediately** with the current value and then again every time it changes. This is useful for triggering an initial render:
+
+```javascript
+async onEnable() {
+  this.settings.getChanges('my-addon.font-size', value => {
+    this._applyFontSize(value);
+  }, this);
+}
+```
+
+### Using `settings.onChange(key, fn)`
+
+`onChange` is like `getChanges` but does **not** call `fn` immediately — only on subsequent changes:
+
+```javascript
+this.settings.onChange('my-addon.show-overlay', enabled => {
+  if (enabled) this._show();
+  else this._hide();
+}, this);
+```
+
+### Inline `changed` callback
+
+You can also attach a change listener directly in the definition object:
+
+```javascript
+this.settings.add('my-addon.show-overlay', {
+  default: true,
+  changed: (newValue) => {
+    this._applyOverlay(newValue);
+  },
+  ui: { /* ... */ },
+});
+```
+
+## Removing a setting
+
+If you need to dynamically remove a setting definition (uncommon):
+
+```javascript
+this.settings.remove('my-addon.show-overlay');
+```
+
+Note that this removes the definition from the UI and from change-event dispatch, but does not erase stored values from profiles.
+
+## Adding UI-only items
+
+Use `addUI` to add a navigation entry or informational element that is not backed by a stored value:
+
+```javascript
+this.settings.addUI('my-addon.info-box', {
+  path: 'Add-Ons >> My Add-on',
+  component: 'setting-spacer',
+  top: '1rem',
+});
+```
+
+## Settings key naming conventions
+
+<Warning>
+Always prefix your settings keys with your add-on's ID: `my-addon.some-setting`. FFZ uses a flat key namespace; unprefixed keys risk colliding with core FFZ settings or other add-ons.
+</Warning>
+
+Recommended patterns:
+
+- `my-addon.feature-name` — top-level toggle
+- `my-addon.feature-name.sub-option` — nested option within a feature
+- `my-addon.debug.verbose` — debug-only settings
+
+## Full example
+
+```javascript
+class MyAddon extends Addon {
+  static info = { id: 'my-addon', name: 'My Add-on', author: 'Me', description: '...' };
+
+  async onEnable() {
+    this.settings.add('my-addon.highlight-color', {
+      default: '#ff0000',
+      ui: {
+        path: 'Add-Ons >> My Add-on',
+        title: 'Highlight colour',
+        description: 'Colour used to highlight matching messages.',
+        component: 'setting-color-box',
+      },
+    });
+
+    this.settings.add('my-addon.min-bits', {
+      default: 100,
+      ui: {
+        path: 'Add-Ons >> My Add-on',
+        title: 'Minimum bits threshold',
+        component: 'setting-text-box',
+        process: 'to_int',
+        bounds: [1],
+      },
+    });
+
+    // React to changes immediately
+    this.settings.getChanges('my-addon.highlight-color', color => {
+      this._updateStyle(color);
+    }, this);
+  }
+
+  async onDisable() {
+    // Clean up listeners attached to external modules/objects
+    this.settings.off(':changed:my-addon.highlight-color', null, this);
+  }
+
+  _updateStyle(color) {
+    // Apply the new color to your managed style, etc.
+  }
+}
+
+MyAddon.register();
+```

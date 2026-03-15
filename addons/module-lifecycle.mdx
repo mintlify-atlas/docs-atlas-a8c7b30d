@@ -1,0 +1,220 @@
+---
+title: Module Lifecycle
+description: Detailed guide to onLoad, onEnable, onDisable, onUnload, load_requires vs requires, and module states.
+---
+
+Every FFZ module — including your add-on — moves through a well-defined set of states managed by the `Module` base class (`src/utilities/module.ts`). Understanding these states is essential for writing add-ons that initialise and clean up correctly.
+
+## States
+
+A module has two independent state machines: **load state** and **enable state**.
+
+### Load state (`LoadState`)
+
+| Value | Meaning |
+|---|---|
+| `Unloaded` | Default. The module has not been loaded. |
+| `Loading` | `onLoad()` is running, or load dependencies are being enabled. |
+| `Loaded` | `onLoad()` completed successfully. |
+| `Unloading` | `onUnload()` is running. |
+
+A module that has no `onLoad()` method and no `load_requires` entries is considered **immediately Loaded** — it skips the loading phase entirely.
+
+### Enable state (`State`)
+
+| Value | Meaning |
+|---|---|
+| `Disabled` | Default. The module is not active. |
+| `Enabling` | `onEnable()` is running, or enable dependencies are being enabled. |
+| `Enabled` | `onEnable()` completed successfully. |
+| `Disabling` | `onDisable()` is running. |
+
+A module that has no `onEnable()` method is considered **immediately Enabled** once it is Loaded.
+
+## Lifecycle hooks
+
+### `onLoad(): void | Promise<void>`
+
+Called once when the module is loaded for the first time. Use this for **heavy, one-time initialisation** — fetching remote data, parsing large data structures, etc. — that you want to decouple from the enable/disable cycle.
+
+```javascript
+async onLoad() {
+  // Fetch badge data once. Even if the add-on is toggled off and on,
+  // this only runs the first time.
+  const response = await fetch('https://api.example.com/badges');
+  this._badgeData = await response.json();
+}
+```
+
+<Warning>
+If you define `onLoad()` you **must** also define `onUnload()`, otherwise the module cannot be unloaded and FFZ will refuse to call `disable()` while the module is in `Loaded` state.
+</Warning>
+
+### `onEnable(): void | Promise<void>`
+
+Called every time the module transitions from `Disabled` to `Enabled`. For an add-on this happens when:
+
+- The page loads and the user already has the add-on enabled
+- The user enables the add-on from the control center
+
+This is the right place to register settings, hook into chat, start timers, and attach event listeners.
+
+```javascript
+async onEnable() {
+  this.settings.add('my-addon.enabled', {
+    default: true,
+    ui: {
+      path: 'Add-Ons >> My Add-on',
+      title: 'Enable feature',
+      component: 'setting-check-box',
+    },
+  });
+
+  // Listen for a setting change
+  this.settings.on(':changed:my-addon.enabled', this.onSettingChanged, this);
+
+  const chat = this.resolve('chat');
+  if (chat) {
+    chat.addTokenizer(this._myTokenizer);
+  }
+}
+```
+
+### `onDisable(): void | Promise<void>`
+
+Called every time the module transitions from `Enabled` back to `Disabled`. You must clean up everything you did in `onEnable()` here. If you define `onEnable()` without `onDisable()`, FFZ will throw an error when it tries to disable your module.
+
+```javascript
+async onDisable() {
+  this.settings.off(':changed:my-addon.enabled', this.onSettingChanged, this);
+
+  const chat = this.resolve('chat');
+  if (chat) {
+    chat.removeTokenizer(this._myTokenizer);
+  }
+}
+```
+
+<Tip>
+Event listeners registered with `this.on(event, fn, this)` where the context is `this` (which is the default when omitting the context argument on Module methods) are automatically cleaned up when the module is disabled. You only need to manually clean up listeners on *other* modules.
+</Tip>
+
+### `onUnload(): void | Promise<void>`
+
+Called once when the module is unloaded. Only needed if you defined `onLoad()`. Reverse everything you did in `onLoad()`.
+
+```javascript
+async onUnload() {
+  this._badgeData = null;
+}
+```
+
+## Dependency declarations
+
+### `requires` — enable-time dependencies
+
+List module paths here if they must be **enabled** before your module can enable. The system resolves these in parallel and waits for all of them before calling your `onEnable()`.
+
+```javascript
+class MyAddon extends Addon {
+  // Declare as a class property or in the constructor
+  requires = ['chat', 'chat.emotes'];
+
+  async onEnable() {
+    // this.chat and this.emotes will already be enabled here
+    // if you injected them; or resolve them manually:
+    const emotes = this.resolve('chat.emotes');
+  }
+}
+```
+
+### `load_requires` — load-time dependencies
+
+List module paths here if they must be **enabled** before your module can *load* (i.e., before `onLoad()` runs). This is less common — use it when you need data from another module during the load phase.
+
+```javascript
+class MyAddon extends Addon {
+  load_requires = ['settings'];
+
+  async onLoad() {
+    // settings is guaranteed enabled by this point
+    const val = this.settings.get('some-core-setting');
+  }
+}
+```
+
+<Note>
+`load_requires` causes the listed modules to be **enabled** (not merely loaded) before your `onLoad()` runs. Internally the load machinery calls `module.__enable()` for each load dependency.
+</Note>
+
+## Module state properties
+
+At any point you can inspect a module's current state:
+
+```javascript
+const mod = this.resolve('chat');
+
+mod.loaded;    // boolean — true when LoadState === Loaded
+mod.loading;   // boolean — true when LoadState === Loading
+mod.enabled;   // boolean — true when State === Enabled
+mod.enabling;  // boolean — true when State === Enabling
+
+mod.load_state; // LoadState enum value
+mod.state;      // State enum value
+```
+
+## Event lifecycle events
+
+Modules emit built-in events at each transition:
+
+| Event | Emitted when |
+|---|---|
+| `:registered` | Module instance is created |
+| `:loaded` | Module reaches `LoadState.Loaded` |
+| `:unloaded` | Module reaches `LoadState.Unloaded` |
+| `:enabled` | Module reaches `State.Enabled` |
+| `:disabled` | Module reaches `State.Disabled` |
+
+```javascript
+const chat = this.resolve('chat');
+chat.on(':enabled', () => {
+  this.log.info('Chat module just became enabled');
+}, this);
+```
+
+## Complete lifecycle diagram
+
+```
+register()
+  │
+  ▼
+[Unloaded / Disabled]
+  │
+  │  load()  (automatic before enable)
+  ▼
+[Loading]  ←── load_requires are enabled
+  │  onLoad() runs
+  ▼
+[Loaded / Disabled]
+  │
+  │  enable()
+  ▼
+[Enabling]  ←── requires are enabled
+  │  onEnable() runs
+  ▼
+[Loaded / Enabled]   ← normal operating state
+  │
+  │  disable()
+  ▼
+[Disabling]  ←── all dependents are disabled first
+  │  onDisable() runs
+  ▼
+[Loaded / Disabled]
+  │
+  │  unload()  (optional)
+  ▼
+[Unloading]  ←── all load_dependents are unloaded first
+  │  onUnload() runs
+  ▼
+[Unloaded / Disabled]
+```

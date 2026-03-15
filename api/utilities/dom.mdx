@@ -1,0 +1,330 @@
+---
+title: DOM Utilities
+description: API reference for FrankerFaceZ DOM helpers — createElement, React tree traversal, ManagedStyle, ClickOutside, and more.
+---
+
+## Overview
+
+The DOM utilities module provides JSX-compatible element creation, React render-tree scanning, managed `<style>` elements, and other browser DOM helpers.
+
+```typescript
+import {
+  createElement,
+  setChildren,
+  findReactFragment,
+  ManagedStyle,
+  ClickOutside,
+  sanitize,
+  openFile,
+  readFile,
+  hasSharedParent,
+  on,
+  off,
+} from 'utilities/dom';
+
+// or from an add-on:
+const { createElement } = FrankerFaceZ.utilities.dom;
+```
+
+---
+
+## `createElement(tag, props?, ...children)`
+
+Creates a native `HTMLElement` using the same calling convention as `React.createElement`, making it usable with JSX pragma.
+
+```typescript
+function createElement<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  props?: Record<string, any> | string | null,
+  ...children: DomFragment[]
+): HTMLElementTagNameMap[K]
+```
+
+<ParamField path="tag" type="string" required>
+  Tag name to create. SVG tags (e.g. `"svg"`, `"path"`) are created in the correct SVG namespace automatically.
+</ParamField>
+
+<ParamField path="props" type="object | string | null">
+  Property map, or a shorthand `string` which is treated as the element's `class` attribute.
+
+  <Expandable title="Supported prop keys">
+    <ParamField path="className" type="string">
+      Sets the `class` attribute (React-compatible alias).
+    </ParamField>
+    <ParamField path="style" type="string | CSSProperties">
+      Inline styles. Accepts a CSS string or a plain object (camelCase keys).
+    </ParamField>
+    <ParamField path="dataset" type="object">
+      Sets `element.dataset.*` entries. Keys are camelCased automatically.
+    </ParamField>
+    <ParamField path="dangerouslySetInnerHTML" type="{ __html: string }">
+      Sets `innerHTML` directly (React compatibility).
+    </ParamField>
+    <ParamField path="on*" type="EventListener">
+      Any key starting with `on` registers an event listener (e.g. `onclick`, `onmouseenter`).
+    </ParamField>
+    <ParamField path="data-*" type="string">
+      Sets the corresponding `dataset` entry.
+    </ParamField>
+    <ParamField path="aria-*" type="string">
+      Set directly as attributes.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField path="children" type="DomFragment">
+  Zero or more children. Each child can be a `Node`, a string, `null`, or a nested array.
+</ParamField>
+
+<ResponseField name="returns" type="HTMLElement">
+  The newly created element with all props and children applied.
+</ResponseField>
+
+<Tabs>
+  <Tab title="Imperative">
+    ```typescript
+    const badge = createElement('span', {
+      className: 'ffz-badge tw-mg-r-05',
+      title: 'Subscriber',
+    }, createElement('figure', { className: 'ffz-i-star' }));
+    ```
+  </Tab>
+  <Tab title="JSX">
+    ```tsx
+    // Requires: import { createElement } from 'utilities/dom';
+    // or: const { createElement } = FrankerFaceZ.utilities.dom;
+
+    const badge = (
+      <span className="ffz-badge tw-mg-r-05" title="Subscriber">
+        <figure className="ffz-i-star" />
+      </span>
+    );
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Functions are **not** supported as the `tag` argument. This helper only creates native DOM elements, not React components.
+</Note>
+
+---
+
+## `setChildren(element, children, no_sanitize?, no_empty?)`
+
+Appends children to an existing element. Also used internally by `createElement`.
+
+```typescript
+function setChildren(
+  element: HTMLElement,
+  children: DomFragment,
+  no_sanitize?: boolean,  // deprecated, has no effect
+  no_empty?: boolean      // when true, existing children are preserved
+): void
+```
+
+<Warning>
+  The `no_sanitize` parameter is no longer supported. String children are always added as text nodes.
+</Warning>
+
+---
+
+## `findReactFragment(frag, criteria, depth?, current?, visited?)`
+
+Recursively walks a React render tree, starting from `frag`, searching for the first node that satisfies `criteria`.
+
+```typescript
+function findReactFragment<TNode extends { props?: { children?: any } }>(
+  frag: TNode,
+  criteria: (node: TNode) => boolean,
+  depth?: number,    // default: 25
+  current?: number,  // internal
+  visited?: Set<any> // internal
+): TNode | null
+```
+
+<ParamField path="frag" type="TNode" required>
+  Starting node in the React fiber/vdom tree.
+</ParamField>
+<ParamField path="criteria" type="(node: TNode) => boolean" required>
+  Predicate that returns `true` for the desired node.
+</ParamField>
+<ParamField path="depth" type="number">
+  Maximum recursion depth. Defaults to `25`. Increase cautiously — deeper searches are slower.
+</ParamField>
+
+<ResponseField name="returns" type="TNode | null">
+  The first matching node, or `null`.
+</ResponseField>
+
+```typescript
+const channelNode = findReactFragment(rootFiber, node =>
+  node?.props?.channelID != null
+);
+```
+
+---
+
+## `hasSharedParent(element, other, selector?)`
+
+Returns `true` if `element` and `other` share a common ancestor, optionally constrained to ancestors matching a CSS selector.
+
+```typescript
+function hasSharedParent(
+  element: Node | null,
+  other: Node,
+  selector?: string
+): boolean
+```
+
+---
+
+## `on(obj, type, listener, options?)` / `off(...)`
+
+Thin wrappers around `addEventListener` / `removeEventListener`.
+
+```typescript
+function on(
+  obj: EventTarget,
+  type: string,
+  listener: EventListenerOrEventListenerObject | null,
+  options?: boolean | AddEventListenerOptions
+): void
+
+function off(
+  obj: EventTarget,
+  type: string,
+  listener: EventListenerOrEventListenerObject | null,
+  options?: boolean | EventListenerOptions
+): void
+```
+
+---
+
+## `sanitize(text)`
+
+HTML-escapes a string using the browser's native DOM (safe, no dependencies).
+
+```typescript
+function sanitize(text: string): string
+```
+
+```typescript
+element.innerHTML = `<p>${sanitize(userInput)}</p>`;
+```
+
+---
+
+## `openFile(contentType, multiple)`
+
+Displays a native file picker dialog and resolves with the selected file(s).
+
+```typescript
+function openFile(
+  contentType: string,  // e.g. 'image/*', 'application/json'
+  multiple: boolean
+): Promise<File | File[] | null>
+```
+
+```typescript
+const file = await openFile('application/json', false) as File | null;
+if (file) {
+  const text = await readFile(file) as string;
+  const data = JSON.parse(text);
+}
+```
+
+---
+
+## `readFile(file, encoding?)`
+
+Reads a `Blob` or `File` as text.
+
+```typescript
+function readFile(file: Blob, encoding?: string): Promise<string | ArrayBuffer | null>
+```
+
+<ParamField path="encoding" type="string">
+  Character encoding. Defaults to `"utf-8"`.
+</ParamField>
+
+---
+
+## `ManagedStyle`
+
+Manages named CSS blocks inside a single injected `<style>` element. Ideal for dynamic theming where individual rule sets need to be updated or removed independently.
+
+```typescript
+const style = new ManagedStyle();
+```
+
+### Methods
+
+<ResponseField name="set(key, value, force?)" type="void">
+  Creates or updates the CSS block identified by `key`. When `force` is `false` (default), the text node is only updated if the value changed.
+</ResponseField>
+
+<ResponseField name="get(key)" type="string | undefined">
+  Returns the current CSS text for `key`.
+</ResponseField>
+
+<ResponseField name="has(key)" type="boolean">
+  Returns `true` if a block exists for `key`.
+</ResponseField>
+
+<ResponseField name="delete(key)" type="void">
+  Removes the block for `key` from the style element.
+</ResponseField>
+
+<ResponseField name="clear()" type="void">
+  Removes all blocks.
+</ResponseField>
+
+<ResponseField name="destroy()" type="void">
+  Removes the `<style>` element from the DOM and frees all references.
+</ResponseField>
+
+```typescript
+const style = new ManagedStyle();
+
+style.set('chat-font', `
+  .chat-line__message {
+    font-size: ${size}px;
+  }
+`);
+
+// Later, when the setting changes:
+style.set('chat-font', `
+  .chat-line__message { font-size: ${newSize}px; }
+`);
+
+// When the module is disabled:
+style.destroy();
+```
+
+---
+
+## `ClickOutside`
+
+Callbacks when a click occurs outside a given element. Useful for closing dropdowns and tooltips.
+
+```typescript
+const outside = new ClickOutside(element, (event) => {
+  closeMenu();
+});
+
+// Later:
+outside.destroy();
+```
+
+### Constructor
+
+```typescript
+new ClickOutside(
+  element: HTMLElement,
+  callback: (event: MouseEvent) => void
+)
+```
+
+### `outside.destroy()`
+
+Removes the global click listener and clears all references.

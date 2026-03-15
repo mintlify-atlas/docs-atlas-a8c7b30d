@@ -1,0 +1,319 @@
+---
+title: i18n / Translations
+description: API reference for the FrankerFaceZ internationalization system — TranslationManager, TranslationCore, the t() method, ICU message format, and built-in formatters.
+---
+
+## Overview
+
+FrankerFaceZ uses a two-layer i18n stack:
+
+- **`TranslationCore`** (`utilities/translation-core`) — the low-level engine that parses ICU message syntax and formats values.
+- **`TranslationManager`** (`src/i18n`) — the FFZ module that wraps `TranslationCore`, loads locale files, and integrates with the settings system.
+
+Inside any module you have access to both via `this.i18n` (the `TranslationManager`) and, through it, the active `TranslationCore` at `this.i18n._`.
+
+---
+
+## `t(key, phrase, data?)`
+
+The primary translation method. Looks up `key` in the loaded phrases, falls back to the `phrase` string, interpolates `data`, and returns a plain string.
+
+```typescript
+t(
+  key: string,
+  phrase: string,
+  data?: Record<string, any> | number | null,
+  settings?: ParseTranslationSettings
+): string
+```
+
+<ParamField path="key" type="string" required>
+  The i18n key, e.g. `"chat.emotes.tooltip"`.
+</ParamField>
+
+<ParamField path="phrase" type="string" required>
+  The default English phrase in ICU message format. Used when no translation is available for the active locale.
+</ParamField>
+
+<ParamField path="data" type="object | number | null">
+  Variables to interpolate. When a `number` is passed it is automatically wrapped as `{ count: n }`.
+</ParamField>
+
+<ParamField path="settings" type="ParseTranslationSettings">
+  Advanced options:
+  - `noCache: boolean` — bypass the AST cache
+  - `throwParse: boolean` — throw on parse errors instead of warning
+  - `noWarn: boolean` — suppress parse warnings
+</ParamField>
+
+<ResponseField name="returns" type="string">
+  The translated and interpolated string.
+</ResponseField>
+
+```typescript
+// Simple string
+this.i18n.t('greeting', 'Hello, world!');
+
+// With variables
+this.i18n.t('chat.viewer-count', '{count} viewers', { count: 1234 });
+// → '1234 viewers'
+
+// Shorthand: number arg becomes { count: n }
+this.i18n.t('badge.count', '{count} badges', 5);
+// → '5 badges'
+```
+
+---
+
+## `tList(key, phrase, data?)`
+
+Same as `t()` but returns the raw list of segments (strings and React/DOM nodes) rather than joining them into a single string. Useful when you need to embed non-string values like `<em>` nodes.
+
+```typescript
+tList(
+  key: string,
+  phrase: string,
+  data?: Record<string, any> | number | null,
+  settings?: ParseTranslationSettings
+): any[]
+```
+
+---
+
+## ICU message format
+
+Phrases use the [ICU message syntax](https://unicode-org.github.io/icu/userguide/format_parse/messages/) parsed by `@ffz/icu-msgparser`.
+
+### Plain variable
+
+```
+Hello, {name}!
+```
+
+### Typed variable
+
+```
+You have {count, number} unread messages.
+```
+
+### Plural
+
+```
+{count, plural,
+  one {# new follower}
+  other {# new followers}
+}
+```
+
+### Select
+
+```
+{gender, select,
+  male {He}
+  female {She}
+  other {They}
+} followed you.
+```
+
+### Select ordinal
+
+```
+You finished in {place, selectordinal,
+  one {#st}
+  two {#nd}
+  few {#rd}
+  other {#th}
+} place.
+```
+
+<Note>
+  The parser is configured with `allowTags: false` and `requireOther: false`. Tag syntax (`<b>...</b>` inside messages) is **not** supported.
+</Note>
+
+---
+
+## Built-in type formatters
+
+The following types are available inside ICU braces (`{variable, type, format}`).
+
+| Type | Example | Description |
+|---|---|---|
+| `number` | `{val, number}` | Format using `Intl.NumberFormat` |
+| `currency` | `{price, currency, USD}` | Format as currency |
+| `date` | `{ts, date, short}` | Format as localized date |
+| `time` | `{ts, time, short}` | Format as localized time |
+| `datetime` | `{ts, datetime, medium}` | Format as localized date+time |
+| `duration` | `{secs, duration}` | Human-readable duration string |
+| `relativetime` | `{ts, relativetime}` | e.g. "3 minutes ago" |
+| `humantime` | `{ts, humantime}` | Alias for `relativetime` |
+| `select` | `{key, select, …}` | Select branch by exact string value |
+| `plural` | `{n, plural, …}` | Select branch by cardinal plural rule |
+| `selectordinal` | `{n, selectordinal, …}` | Select branch by ordinal plural rule |
+| `tostring` | `{val, tostring}` | Coerce value to string via template literal |
+| `localestring` | `{val, localestring}` | Call `.toLocaleString(locale)` |
+| `en_plural` | `{n, en_plural}` | Returns `'s'` when `n !== 1`, else `''` |
+
+---
+
+## Date / time format names
+
+The `date`, `time`, and `datetime` types accept a named format as the third argument.
+
+### Date formats
+
+| Name | Example output |
+|---|---|
+| `short` | 3/15/26 |
+| `default` | March 15, 2026 |
+| `medium` | Mar 15, 2026 |
+| `long` | March 15, 2026 |
+| `full` | Sunday, March 15, 2026 |
+
+### Time formats
+
+| Name | Example output |
+|---|---|
+| `short` | 2:30 PM |
+| `medium` | 2:30:45 PM |
+| `full` | 2:30:45 PM PDT |
+
+### DateTime formats
+
+| Name | Example output |
+|---|---|
+| `short` | 3/15/26, 2:30 PM |
+| `medium` | (default) |
+| `long` | March 15, 2026 at 2:30:45 PM |
+| `full` | Sunday, March 15, 2026 at 2:30:45 PM PDT |
+
+---
+
+## `TranslationCore` reference
+
+```typescript
+import TranslationCore from 'utilities/translation-core';
+```
+
+### Constructor
+
+```typescript
+new TranslationCore(options?: Partial<TranslationOptions>)
+```
+
+<ParamField path="options.locale" type="string">
+  Active locale code, e.g. `"en"`, `"de"`. Defaults to `"en"`.
+</ParamField>
+<ParamField path="options.defaultLocale" type="string">
+  Fallback locale used when the phrase has not been translated. Defaults to `locale`.
+</ParamField>
+<ParamField path="options.phrases" type="RecursivePhraseMap">
+  Initial phrase map loaded immediately.
+</ParamField>
+<ParamField path="options.types" type="Record<string, TypeFormatter>">
+  Additional or replacement type formatters.
+</ParamField>
+<ParamField path="options.formats" type="Partial<FormattingOptions>">
+  Override the built-in date / time / number format presets.
+</ParamField>
+
+### `locale` (getter/setter)
+
+```typescript
+core.locale = 'de';
+console.log(core.locale); // 'de'
+```
+
+Setting a new locale clears the `numberFormats` and `currencyFormats` caches.
+
+### Phrase management
+
+```typescript
+core.extend(phrases: RecursivePhraseMap, prefix?: string): string[]
+core.unset(phrases: string | string[], prefix: string): void
+core.set(key: string, phrase: string): void
+core.has(key: string): boolean
+core.clear(): void
+core.replace(phrases: RecursivePhraseMap): void
+```
+
+- **`extend`** — Deep-merges a phrase map into the active set. Nested objects are prefixed. Returns the list of added keys.
+- **`replace`** — Clears all phrases then calls `extend`.
+
+### Formatting helpers
+
+| Method | Signature |
+|---|---|
+| `formatNumber` | `(value, format) => string` |
+| `formatCurrency` | `(value, currency) => string` |
+| `formatDate` | `(value, format?) => string` |
+| `formatTime` | `(value, format?) => string` |
+| `formatDateTime` | `(value, format?) => string` |
+| `formatDuration` | `(value: number) => string` |
+| `formatRelativeTime` | `(value, format?) => string` |
+| `toLocaleString` | `(value) => string` |
+
+---
+
+## `TranslationManager` — module API
+
+The `TranslationManager` extends `Module` and exposes `TranslationCore` at `this.i18n._` for direct access.
+
+### Settings
+
+| Key | Default | Description |
+|---|---|---|
+| `i18n.locale` | auto | Active locale. Defaults to the Twitch UI language. |
+| `i18n.format.date` | `"default"` | Default date format name |
+| `i18n.format.time` | `"short"` | Default time format name |
+| `i18n.format.datetime` | `"medium"` | Default datetime format name |
+
+### Events
+
+| Event | Description |
+|---|---|
+| `:update` | Emitted when the locale or phrase data changes — re-render all translated UI |
+| `:transform` | Emitted when the debug transformation mode changes |
+
+### Delegation
+
+`TranslationManager` proxies `t()`, `tList()`, and formatting methods directly, so you can call them as `this.i18n.t(...)` without reaching into `this.i18n._`.
+
+---
+
+## Usage examples
+
+<Tabs>
+  <Tab title="Simple string">
+    ```typescript
+    const msg = this.i18n.t(
+      'my-addon.welcome',
+      'Welcome to My Addon!'
+    );
+    ```
+  </Tab>
+  <Tab title="Plurals">
+    ```typescript
+    const msg = this.i18n.t(
+      'my-addon.emote-count',
+      'Loaded {count, plural, one {# emote} other {# emotes}}.',
+      { count: emotes.length }
+    );
+    ```
+  </Tab>
+  <Tab title="Dates">
+    ```typescript
+    const msg = this.i18n.t(
+      'my-addon.stream-started',
+      'Stream started {date, date, medium}.',
+      { date: startedAt }
+    );
+    ```
+  </Tab>
+  <Tab title="React to locale changes">
+    ```typescript
+    this.i18n.on(':update', () => {
+      this.rerender();
+    });
+    ```
+  </Tab>
+</Tabs>

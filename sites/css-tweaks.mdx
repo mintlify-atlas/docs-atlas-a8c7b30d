@@ -1,0 +1,164 @@
+---
+title: CSS Tweaks
+description: How FrankerFaceZ applies CSS customizations to Twitch — the ManagedStyle system, the CLASSES selector map, and the categories of tweaks available.
+---
+
+The CSS tweaks system lives in `src/sites/twitch-twilight/modules/css_tweaks/`. It provides a settings-driven mechanism to inject, toggle, and update CSS rules on the Twitch page without reloading.
+
+## Architecture
+
+`CSSTweaks` extends `Module` with `should_enable = true`. It owns a single `ManagedStyle` instance that holds all dynamically injected styles, and a `chunks` map that tracks which named SCSS chunk files have been loaded.
+
+```js
+export default class CSSTweaks extends Module {
+	constructor(...args) {
+		super(...args);
+		this.should_enable = true;
+		this.style = new ManagedStyle;
+		this.chunks = {};
+		this._state = {};
+	}
+}
+```
+
+## The CLASSES map
+
+`CLASSES` is a static object mapping short tweak keys to one or more CSS selectors. These keys are used by `toggleHide()` to inject a `display: none` rule targeting the right element:
+
+```js
+const CLASSES = {
+	'side-nav': '.side-nav,#sideNav',
+	'side-nav-viewers': '.side-nav-card__live-status',
+	'prime-offers': '.top-nav__prime',
+	'player-ext': '.video-player .extension-taskbar,...',
+	'pinned-cheer': '.pinned-cheer,.pinned-cheer-v2,.channel-leaderboard,...',
+	'whispers': 'body .whispers-open-threads,...',
+	'pinned-hype-chat': '.paid-pinned-chat-message-list',
+	// ...
+};
+```
+
+`toggleHide(key, value)` looks up the selector in `CLASSES` and injects or removes a rule like:
+
+```css
+/* generated for key 'prime-offers' when hidden */
+.top-nav__prime { display: none !important; }
+```
+
+`toggle(key, value)` loads or unloads a named SCSS chunk from the `styles/` directory instead of generating a rule inline.
+
+## SCSS chunk files
+
+Each file in `styles/` is a self-contained stylesheet for one visual tweak. They are loaded on demand by `toggle()` and unloaded when the setting is turned off. The 59 current chunk files cover:
+
+### Layout
+
+| Chunk | Effect |
+|---|---|
+| `swap-sidebars.scss` | Moves navigation to the right and chat to the left |
+| `hide-side-nav.scss` | Hides the left-side navigation panel |
+| `hide-side-nav-avatars.scss` | Removes avatar images from the side nav |
+| `minimal-navigation.scss` | Slides the top nav bar up when not in use |
+| `theatre-nav.scss` | Shows the minimized nav in theatre mode |
+| `portrait.scss` | Portrait layout: stacks chat below the player |
+| `portrait-metadata.scss` | Metadata adjustments for portrait mode |
+| `portrait-metadata-top.scss` | Places metadata above the player in portrait |
+| `channel-metadata-top.scss` | Moves channel metadata above the player |
+
+### Chat appearance
+
+| Chunk | Effect |
+|---|---|
+| `chat-font.scss` | Applies a custom font family to chat |
+| `chat-padding.scss` | Adjusts padding between chat messages |
+| `chat-rows.scss` | Controls row height in chat |
+| `chat-width.scss` | Sets a custom chat panel width |
+| `chat-fix.scss` | Fixes chat layout when sidebars are swapped or portrait mode is active |
+| `chat-no-animate.scss` | Disables chat layout animations |
+| `chat-borders.scss` | Adds borders between chat messages |
+| `chat-borders-wide.scss` | Wide variant of chat borders |
+| `chat-borders-3d.scss` | 3D-style raised borders |
+| `chat-borders-3d-inset.scss` | 3D-style inset borders |
+| `chat-deleted-fade.scss` | Fades deleted messages instead of striking them |
+| `chat-deleted-strike.scss` | Strikethrough for deleted messages |
+| `chat-deleted-no-strike.scss` | Removes all styling from deleted messages |
+| `chat-mention-bg.scss` | Highlight background for mentions |
+| `chat-mention-bg-alt.scss` | Alternative mention highlight color |
+| `chat-mention-bg-custom.scss` | User-defined mention highlight color |
+| `chat-mention-no-bold.scss` | Disables bold on mention tokens |
+| `chat-mention-token.scss` | Styles the @username token in mentions |
+| `clickable-mentions.scss` | Makes @mentions clickable |
+| `hide-chat-identity.scss` | Hides chat identity (pronouns, badges) |
+| `hide-costream-border.scss` | Hides the border around co-stream participants |
+
+### Emotes
+
+| Chunk | Effect |
+|---|---|
+| `big-emoji.scss` | Enlarges standalone emoji |
+| `big-emote-jail.scss` | Enlarges emotes in the "emote jail" |
+| `bigger-emote-jail.scss` | Extra-large emotes in the emote jail |
+| `emote-alignment-baseline.scss` | Aligns emotes to the text baseline |
+| `emote-alignment-padded.scss` | Adds padding around inline emotes |
+| `emote-menu.scss` | Styles the FFZ emote picker |
+
+### Player
+
+| Chunk | Effect |
+|---|---|
+| `player-size.scss` | Sets a custom player size |
+| `player-volume.scss` | Adjusts the volume slider style |
+| `player-ext-mouse.scss` | Shows player extensions only on hover |
+| `player-fade-paused.scss` | Fades the player when paused |
+| `player-hide-mouse.scss` | Hides the mouse cursor over the player |
+| `player-hide-native-clip.scss` | Hides the native clip button |
+| `hide-native-viewers.scss` | Hides Twitch's native viewer count (used when FFZ's own count is enabled) |
+| `hide-native-uptime.scss` | Hides Twitch's native stream uptime |
+
+### Directory / Browse
+
+| Chunk | Effect |
+|---|---|
+| `dir-blur-title.scss` | Blurs stream titles in the directory |
+| `dir-no-blur.scss` | Disables blur on thumbnails |
+| `dir-reveal.scss` | Reveals blurred content on hover |
+
+### Miscellaneous
+
+| Chunk | Effect |
+|---|---|
+| `square-avatars.scss` | Makes avatar images square |
+| `hide-bits.scss` | Hides bits UI elements |
+| `hide-unfollow-button.scss` | Hides the Unfollow button |
+| `hc-tweaks.scss` | Hype Chat UI adjustments |
+| `panel-links.scss` | Styles links in channel panels |
+| `theatre-metadata.scss` | Metadata layout in theatre mode |
+| `theatre-no-whispers.scss` | Hides whispers in theatre mode |
+| `global-font.scss` | Overrides the font for the entire Twitch page |
+| `side-rerun-opacity.scss` | Fades reruns in the side nav to 33% opacity |
+
+## Settings integration
+
+Every tweak is backed by a settings entry registered in the `CSSTweaks` constructor. The `changed` callback calls `toggle()` or `toggleHide()` so the style updates immediately when the user changes the setting:
+
+```js
+this.settings.add('layout.side-nav.hide-viewers', {
+	default: false,
+	ui: {
+		path: 'Appearance > Layout >> Side Navigation',
+		title: 'Hide Channel View Counts',
+		component: 'setting-check-box'
+	},
+	changed: val => this.toggleHide('side-nav-viewers', val)
+});
+```
+
+## CSS validation
+
+Before injecting any user-provided CSS value (such as a custom font family), FFZ validates it against a throwaway DOM element:
+
+```js
+const STYLE_VALIDATOR = document.createElement('span');
+```
+
+The validator element is used to test whether a CSS property value is accepted by the browser before applying it to the page.

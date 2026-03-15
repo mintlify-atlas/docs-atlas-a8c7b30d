@@ -1,0 +1,353 @@
+---
+title: SettingsManager
+description: API reference for the FrankerFaceZ settings system — registering definitions, reading and writing values, managing profiles, and reacting to changes.
+---
+
+## Overview
+
+`SettingsManager` is the central module for all settings in FrankerFaceZ. It owns the active storage provider, every `SettingsProfile`, and the `main_context` through which resolved values are read.
+
+Inside a module or add-on you access it via `this.settings` (auto-injected) or `this.resolve('settings')`.
+
+```typescript
+import type SettingsManager from 'src/settings';
+```
+
+---
+
+## Registering settings
+
+### `settings.add(key, definition)`
+
+Declares a new setting and registers its default value, type information, optional UI descriptor, and optional change callback.
+
+```typescript
+settings.add<K extends SettingsKeys, TValue = SettingType<K>>(
+  key: K,
+  definition: SettingDefinition<TValue>,
+  source?: string   // internal – set automatically for add-on proxies
+): void
+```
+
+<ParamField path="key" type="string" required>
+  Dot-separated key that uniquely identifies the setting, e.g. `"chat.emotes.enabled"`.
+</ParamField>
+
+<ParamField path="definition" type="SettingDefinition<TValue>" required>
+  An object describing the setting.
+
+  <Expandable title="SettingDefinition fields">
+    <ParamField path="default" type="TValue | ((ctx: SettingsContext) => TValue)" required>
+      The default value returned when no profile has overridden the setting. May be a plain value or a function that receives the current context.
+    </ParamField>
+    <ParamField path="type" type="string">
+      Optional type-handler key (e.g. `"array_merge"`) used when merging values across profiles.
+    </ParamField>
+    <ParamField path="requires" type="string[]">
+      Keys of other settings this one depends on. When any required setting changes, this setting is also re-evaluated.
+    </ParamField>
+    <ParamField path="always_inherit" type="boolean">
+      When `true` the value is always inherited from parent profiles, even when the current profile has a value set.
+    </ParamField>
+    <ParamField path="inherit_default" type="boolean">
+      When `true`, a profile that has not set a value will inherit from its parent instead of using the default.
+    </ParamField>
+    <ParamField path="process" type="(ctx, val, meta) => TValue">
+      A processor function called after a value is retrieved. Useful for clamping, coercing, or augmenting values.
+    </ParamField>
+    <ParamField path="equals" type="'requirements' | function">
+      Custom equality check. Pass `'requirements'` to only re-notify when required settings change, or supply a comparator `(new_val, old_val, cache, old_cache) => boolean`.
+    </ParamField>
+    <ParamField path="changed" type="(value: TValue) => void">
+      Shorthand callback automatically subscribed to the `:changed:<key>` event on the manager.
+    </ParamField>
+    <ParamField path="ui" type="SettingUiDefinition<TValue>">
+      Descriptor used by the FFZ settings UI. See [UI Definition](#ui-definition) below.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+#### Example
+
+```typescript
+this.settings.add('my-addon.show-banner', {
+  default: true,
+  ui: {
+    path: 'Add-Ons > My Addon >> Appearance',
+    title: 'Show Banner',
+    description: 'Display the banner at the top of chat.',
+    component: 'setting-check-box',
+  },
+  changed: (val) => {
+    this.updateBanner(val);
+  },
+});
+```
+
+<Note>
+  For add-on modules the `settings.add` proxy automatically prefixes internal source tracking with your add-on ID. You do not need to pass `source` manually.
+</Note>
+
+---
+
+### `settings.addUI(key, definition)`
+
+Registers a pure UI node (e.g. a section header or link) in the settings tree without an associated data value.
+
+```typescript
+settings.addUI<K extends string>(
+  key: K,
+  definition: Partial<SettingUiDefinition<TValue>>,
+  source?: string
+): void
+```
+
+---
+
+## Reading values
+
+### `settings.get(key)`
+
+Returns the currently resolved value for the given key, evaluated against the current context. Reads from `main_context`.
+
+```typescript
+settings.get<K extends AllSettingsKeys>(key: K): SettingType<K>
+```
+
+In addition to registered setting keys you can read:
+
+| Key pattern | Description |
+|---|---|
+| `context.<path>` | Value from the current settings context, e.g. `context.channel` |
+| `ls.<key>` | JSON-parsed `localStorage` value |
+| `ls.raw.<key>` | Raw `localStorage` string value |
+
+```typescript
+const enabled = this.settings.get('chat.emotes.enabled'); // boolean
+const channel = this.settings.get('context.channel');     // string | undefined
+```
+
+---
+
+### `settings.getChanges(key, fn, ctx?)`
+
+Calls `fn` immediately with the current value, then subscribes to all future changes.
+
+```typescript
+settings.getChanges<K extends SettingsKeys, TValue = SettingType<K>>(
+  key: K,
+  fn: (val: TValue) => void,
+  ctx?: any
+): void
+```
+
+```typescript
+this.settings.getChanges('chat.font-size', size => {
+  document.documentElement.style.setProperty('--ffz-chat-font-size', `${size}px`);
+});
+```
+
+---
+
+### `settings.onChange(key, fn, ctx?)`
+
+Subscribes to future changes only (does not call `fn` immediately).
+
+```typescript
+settings.onChange<K extends SettingsKeys>(
+  key: K,
+  fn: (val: SettingType<K>) => void,
+  ctx?: any
+): void
+```
+
+---
+
+## Writing values
+
+Values are written through a `SettingsProfile`, not directly through `SettingsManager`. Use the profile obtained via `settings.profile(id)` or created with `settings.createProfile()`.
+
+```typescript
+const profile = this.settings.profile(0); // Default Profile
+profile.set('chat.emotes.enabled', false);
+```
+
+---
+
+## Change events
+
+The manager emits typed events when any setting changes in the main context.
+
+| Event | Payload | Description |
+|---|---|---|
+| `:changed:<key>` | `(newValue, oldValue)` | Fired whenever the resolved value of a setting changes |
+| `:uses_changed:<key>` | `(uses, oldUses)` | Fired when the profile indices that contribute to a value change |
+| `:added-definition` | `(key, definition)` | A new setting was registered |
+| `:removed-definition` | `(key, definition)` | A setting was unregistered |
+| `:profile-created` | `(profile)` | A profile was created |
+| `:profile-changed` | `(profile)` | A profile's metadata was updated |
+| `:profile-deleted` | `(profile)` | A profile was deleted |
+| `:profile-toggled` | `(profile, enabled)` | A profile was enabled or disabled |
+| `:profiles-reordered` | — | Profiles were reordered |
+| `:quota-exceeded` | — | Storage quota was exceeded |
+
+```typescript
+this.settings.on(':changed:chat.emotes.enabled', (newVal, oldVal) => {
+  console.log('Emotes changed from', oldVal, 'to', newVal);
+});
+```
+
+---
+
+## Profile management
+
+### `settings.profile(id)`
+
+Returns an existing `SettingsProfile` by numeric ID or UUID string, or `null` if not found.
+
+```typescript
+settings.profile(id: number | string): SettingsProfile | null
+```
+
+---
+
+### `settings.createProfile(options?)`
+
+Creates a new profile and returns the `SettingsProfile` instance.
+
+```typescript
+settings.createProfile(options?: Partial<SettingsProfileMetadata>): SettingsProfile
+```
+
+<ParamField path="options.name" type="string">
+  Human-readable name. Defaults to `Unnamed Profile N`.
+</ParamField>
+<ParamField path="options.ephemeral" type="boolean">
+  If `true`, the profile is never persisted to storage.
+</ParamField>
+<ParamField path="options.context" type="FilterData[]">
+  Filter rules that must match for the profile to be active.
+</ParamField>
+
+---
+
+### `settings.deleteProfile(id)`
+
+Deletes a profile by ID. Throws if it is the only profile.
+
+```typescript
+settings.deleteProfile(id: number | SettingsProfile): void
+```
+
+---
+
+### `settings.saveProfile(id)`
+
+Persists profile metadata changes and emits `:profile-changed`.
+
+```typescript
+settings.saveProfile(id: number | SettingsProfile): void
+```
+
+---
+
+## Context helpers
+
+### `settings.updateContext(data)` / `settings.setContext(data)`
+
+Update or replace the ambient context used when resolving setting values. Context values are available under the `context.*` key namespace.
+
+```typescript
+settings.updateContext({ channel: 'lirik', moderator: true });
+```
+
+---
+
+## Provider management
+
+### `settings.getProviders()`
+
+Returns all registered `SettingsProvider` constructors keyed by their identifier string.
+
+### `settings.getActiveProvider()`
+
+Returns the key of the currently active provider (e.g. `"local"`, `"idb"`).
+
+### `settings.changeProvider(key, transfer)`
+
+Switches to a different storage provider. When `transfer` is `true`, existing settings are copied over. The page reloads after the switch.
+
+```typescript
+await settings.changeProvider('idb', true);
+```
+
+<Warning>
+  `changeProvider` triggers a page reload. Unsaved application state will be lost.
+</Warning>
+
+---
+
+## SettingsProfile
+
+`SettingsProfile` stores the raw per-profile values and provides `get`/`set`/`delete` access.
+
+### Key methods
+
+| Method | Signature | Description |
+|---|---|---|
+| `profile.get(key)` | `(key: string) => T \| undefined` | Get the raw value set in this profile |
+| `profile.set(key, value)` | `(key: string, val: T) => void` | Persist a value in this profile |
+| `profile.delete(key)` | `(key: string) => void` | Remove an override from this profile |
+| `profile.has(key)` | `(key: string) => boolean` | Whether this profile has a value for the key |
+| `profile.clear()` | `() => void` | Remove all values from this profile |
+
+### Properties
+
+<ResponseField name="id" type="number">
+  Numeric identifier. IDs may be recycled when profiles are deleted and re-created.
+</ResponseField>
+<ResponseField name="uuid" type="string">
+  Globally unique identifier that persists across ID recycling.
+</ResponseField>
+<ResponseField name="name" type="string">
+  Human-readable profile name.
+</ResponseField>
+<ResponseField name="ephemeral" type="boolean">
+  Whether the profile is stored only in memory.
+</ResponseField>
+<ResponseField name="context" type="FilterData[] | null">
+  Filter rules that activate this profile.
+</ResponseField>
+
+---
+
+## SettingsContext
+
+A `SettingsContext` evaluates setting definitions against a specific ambient context and a set of active profiles. `settings.main_context` is the global instance.
+
+You rarely interact with contexts directly — use the helpers on `SettingsManager` instead.
+
+---
+
+## UI Definition
+
+The `ui` field inside a `SettingDefinition` controls how the setting appears in the control panel.
+
+<ParamField path="ui.path" type="string" required>
+  A `>>`-separated path string that places the setting in the settings tree, e.g. `"Appearance > Chat >> Font"`.
+</ParamField>
+<ParamField path="ui.title" type="string" required>
+  Human-readable label.
+</ParamField>
+<ParamField path="ui.description" type="string">
+  Optional description shown below the control.
+</ParamField>
+<ParamField path="ui.component" type="string" required>
+  Vue component name. Built-in options: `setting-check-box`, `setting-text-box`, `setting-select-box`, `setting-combo-box`.
+</ParamField>
+<ParamField path="ui.data" type="array | function">
+  For select/combo boxes, the list of `{ value, title }` entries, or a function returning them.
+</ParamField>
+<ParamField path="ui.i18n_key" type="string">
+  Override the auto-generated i18n key for the title.
+</ParamField>

@@ -1,0 +1,145 @@
+---
+title: Twitch Integration
+description: How FrankerFaceZ integrates with Twitch — site modules, React component interception via Fine, and the DOM mutation system.
+---
+
+FrankerFaceZ integrates with Twitch through the `twitch-twilight` site module, which extends `BaseSite` and wires together a set of compatibility utilities that intercept Twitch's internal React tree, routing state, Apollo GraphQL layer, and real-time subscription pump.
+
+## Site module architecture
+
+The entry point is `src/sites/twitch-twilight/index.js`. On construction it injects the following services:
+
+| Service | Class | Purpose |
+|---|---|---|
+| `web_munch` | `WebMunch` | Intercepts Twitch's webpack module registry to locate internal modules by shape |
+| `fine` | `Fine` | Walks the React fiber tree to find and hook live component instances |
+| `elemental` | `Elemental` | Observes DOM elements and dispatches lifecycle events |
+| `router` | `FineRouter` | Reads Twitch's client-side router state from the React tree |
+| `apollo` | `Apollo` | Hooks into Twitch's Apollo GraphQL client |
+| `twitch_data` | `TwitchData` | Convenience wrapper for Twitch API data |
+| `subpump` | `Subpump` | Hooks into Twitch's internal pub/sub event system |
+
+```js
+// src/sites/twitch-twilight/index.js
+export default class Twilight extends BaseSite {
+	constructor(...args) {
+		super(...args);
+		this.inject(WebMunch);
+		this.inject(Fine);
+		this.inject(Elemental);
+		this.inject('router', FineRouter);
+		this.inject(Apollo, false);
+		this.inject(TwitchData);
+		this.inject(Subpump);
+	}
+}
+```
+
+## Module loading
+
+Site sub-modules are discovered dynamically at runtime using webpack's `require.context`:
+
+```js
+async populateModules() {
+	const ctx = await require.context('site/modules', true, /(?:^(?:.\/)?[^/]+|index)\.[jt]sx?$/);
+	const modules = await this.loadFromContext(ctx, this.log);
+	this.log.info(`Loaded descriptions of ${Object.keys(modules).length} modules.`);
+}
+```
+
+All directories under `src/sites/twitch-twilight/modules/` are picked up automatically. Each module registers itself with the FFZ add-on system and can declare `should_enable = true` to activate without explicit user opt-in.
+
+## React component interception (Fine)
+
+`Fine` is FFZ's primary mechanism for modifying Twitch's UI. It traverses the live React fiber tree to locate component instances by matching on their props or methods, then patches them.
+
+Components are located using `fine.define(name, matcher, routes)`. The matcher receives a component instance's own properties and must return a truthy value when the right component is found. The optional `routes` array limits scanning to specific Twitch pages.
+
+```js
+// Example from chat module
+this.ChatController = this.fine.define(
+	'chat-controller',
+	n => n.parseOutgoingMessage && n.sendMessage && n.renderCommandHandlers,
+	Twilight.CHAT_ROUTES
+);
+```
+
+Once defined, the handle is used to attach lifecycle hooks:
+
+```js
+this.ChatController.on('mount', inst => { /* called when Twitch mounts the component */ });
+this.ChatController.on('update', inst => { /* called on each re-render */ });
+this.ChatController.ready(cls => { /* called when the class is first seen */ });
+```
+
+## Known webpack modules
+
+`WebMunch` maintains a registry of named module finders under `Twilight.KNOWN_MODULES`. Each entry is a function that receives a webpack module export and returns the relevant export when the shape matches:
+
+```js
+Twilight.KNOWN_MODULES = {
+	react: n => n.Component && n.createElement,
+	'react-dom': n => n.createRoot && n.createPortal,
+	core: n => {
+		if (n.x2?.experiments && n.x2.intl) return n.x2;
+		// ... fallbacks for different Twitch builds
+	},
+	'chat-types': n => {
+		if (has(n.ZW, 'Message') && has(n.ZW, 'RoomMods'))
+			return { automod: n.sq, chat: n.ZW, message: n.IF, mod: n.RB };
+		// ... fallbacks
+	},
+	// ...
+};
+```
+
+Modules with `use_result = true` store the return value of the matcher rather than the raw module export. `chunks` can be a string or function to restrict which webpack chunks are scanned.
+
+## DOM mutation system
+
+`BaseSite` provides `awaitElement(selector, parent, timeout)`, which uses a single shared `MutationObserver` per parent node to resolve a promise when a matching element appears in the DOM:
+
+```js
+// Wait up to 60 seconds for an element
+const el = await this.awaitElement('.chat-input__textarea');
+```
+
+The observer watches `childList`, `attributes`, `characterData`, and `subtree` on the parent. Multiple callers sharing the same parent reuse the same observer instance.
+
+DOM updates from the Fine fiber hook are batched via `requestAnimationFrame` and re-emitted on `core:dom-update` after being converted from React fiber instances to real DOM nodes:
+
+```js
+this.on(':dom-update', (...args) => {
+	this._dom_updates.push(args);
+	if (!this._dom_frame)
+		this._dom_frame = requestAnimationFrame(() => {
+			// flush batch, emit 'core:dom-update' for each
+		});
+});
+```
+
+## Redux store context
+
+The Twilight site locates Twitch's Redux store by scanning the React fiber tree for a node whose `pendingProps.store.getState` exists. Once found, FFZ subscribes to store changes and reflects UI state, session, chat state, and the current route into the FFZ settings context:
+
+```js
+store.subscribe(() => this.updateContext());
+
+updateContext() {
+	const state = this.store.getState();
+	this.settings.updateContext({
+		location: this.router?.reactLocation,
+		ui: state.ui,
+		session: state.session,
+		chat: state.chat
+	});
+}
+```
+
+## Route definitions
+
+Routes are defined on the `Twilight` class itself and passed to the router on load. Key route groups:
+
+- **`CHAT_ROUTES`** — All routes where chat is present (channel pages, dashboard, popouts, mod view, etc.)
+- **`POPOUT_ROUTES`** — Popout and embed chat pages
+- **`SUNLIGHT_ROUTES`** — Dashboard sub-pages (analytics, video producer, etc.)

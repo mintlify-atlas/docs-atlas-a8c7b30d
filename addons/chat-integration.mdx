@@ -1,0 +1,412 @@
+---
+title: Chat Integration
+description: How to hook into FFZ chat rendering — registering tokenizers, custom badges, and emote sets.
+---
+
+FFZ's chat pipeline is managed by the `Chat` module (`src/modules/chat/index.js`) and its sub-modules. Add-ons can extend chat by:
+
+- Registering **tokenizers** that transform raw message text into typed tokens
+- Loading **custom badges** displayed next to usernames
+- Loading **emote sets** injected into the emote picker and resolved during tokenization
+- Registering **link providers** and **rich providers** for link tooltip and inline-embed handling
+
+All four surfaces use the same pattern: call an `add*` method on the relevant module in `onEnable()`, and the corresponding `remove*` method in `onDisable()`.
+
+<Note>
+FFZ automatically tracks which add-on registered each tokenizer, badge, link provider, and rich provider via the `__source` property. When your add-on is disabled, all resources owned by it are cleaned up automatically. You should still remove them explicitly in `onDisable()` for symmetry.
+</Note>
+
+## Injecting the chat module
+
+```javascript
+class MyAddon extends Addon {
+  constructor(name, parent) {
+    super(name, parent);
+    this.inject('chat');
+    this.inject('chat.badges');
+    this.inject('chat.emotes');
+  }
+}
+```
+
+After injection, `this.chat`, `this.badges`, and `this.emotes` are available inside `onEnable()` and beyond.
+
+---
+
+## Tokenizers
+
+A **tokenizer** processes the array of tokens that represents a chat message. Tokenizers run in priority order (highest priority first). The built-in tokenizers handle links (priority 50), emotes, and mentions.
+
+### Token structure
+
+The token pipeline starts with a single text token:
+
+```javascript
+[{ type: 'text', text: 'Hello PogChamp world' }]
+```
+
+Each tokenizer can split text tokens, replace them, or inject new tokens. Common token types produced by FFZ:
+
+| Type | Key fields |
+|---|---|
+| `text` | `text: string` |
+| `emote` | `id`, `text`, `provider`, `urls`, `animType` |
+| `mention` | `text`, `recipient` |
+| `link` | `url`, `text`, `is_mail` |
+
+### Registering a tokenizer
+
+```javascript
+const MY_TOKENIZER = {
+  // Unique type identifier — must not conflict with other tokenizers.
+  type: 'my-addon--highlight',
+
+  // Higher priority runs first. Built-in links tokenizer is 50.
+  // Use a lower number (e.g. 10) to run after built-ins.
+  priority: 10,
+
+  // process() is called for every message.
+  // tokens: the current token array
+  // msg:    the raw message object
+  // Return the new (or unchanged) token array, or null/undefined to pass through.
+  process(tokens, msg) {
+    const out = [];
+    for (const token of tokens) {
+      if (token.type !== 'text') {
+        out.push(token);
+        continue;
+      }
+
+      // Example: mark tokens containing "!winner" as a special type
+      if (token.text.includes('!winner')) {
+        out.push({ type: 'my-addon--winner', text: token.text });
+      } else {
+        out.push(token);
+      }
+    }
+    return out;
+  },
+};
+
+class MyAddon extends Addon {
+  constructor(name, parent) {
+    super(name, parent);
+    this.inject('chat');
+  }
+
+  async onEnable() {
+    this.chat.addTokenizer(MY_TOKENIZER);
+  }
+
+  async onDisable() {
+    this.chat.removeTokenizer(MY_TOKENIZER);
+  }
+}
+```
+
+### Tokenizer with a tooltip
+
+You can attach a tooltip renderer to your tokenizer type:
+
+```javascript
+const MY_TOKENIZER = {
+  type: 'my-addon--highlight',
+  priority: 10,
+
+  // tooltip is bound to the Chat module when called.
+  tooltip(target, tip) {
+    return 'This message contains a winner announcement!';
+  },
+
+  process(tokens, msg) { /* ... */ },
+};
+```
+
+### How `process()` runs
+
+```javascript
+// From src/modules/chat/index.js — tokenizeMessage()
+for (const tokenizer of this.__tokenizers) {
+  if (!tokenizer.process) continue;
+
+  const new_tokens = tokenizer.process.call(this, tokens, msg, user, haltable);
+  if (new_tokens)
+    tokens = new_tokens;
+}
+```
+
+Key points:
+
+- `this` inside `process()` is the `Chat` module instance — you have access to `this.context`, `this.i18n`, `this.settings`, etc.
+- Return `null` or `undefined` to leave `tokens` unchanged.
+- Return a new array to replace `tokens`.
+- Set `msg.ffz_halt_tokens = true` inside a haltable call to stop further tokenizers.
+
+---
+
+## Custom badges
+
+Badges are managed by `chat.badges` (`src/modules/chat/badges.jsx`). Use `loadBadgeData()` to register a badge definition, and `setBulk()` or `extendBulk()` to assign it to users.
+
+### Registering a badge
+
+```javascript
+async onEnable() {
+  // Badge ID must include your add-on ID as a prefix.
+  this.badges.loadBadgeData('addon--my-addon--vip', {
+    // slot: render position relative to other badges. Lower = further left.
+    slot: 10,
+
+    // Human-readable name shown in tooltips.
+    name: 'My Add-on VIP',
+
+    // Tooltip title
+    title: 'My Add-on VIP',
+
+    // URLs for 1x, 2x, 4x image variants.
+    urls: {
+      1: 'https://example.com/badge.png',
+      2: 'https://example.com/badge@2x.png',
+      4: 'https://example.com/badge@4x.png',
+    },
+
+    // Optional: override the background color.
+    color: '#6441a5',
+
+    // addon: true marks this as an add-on badge (affects CSS class).
+    addon: true,
+  });
+}
+
+async onDisable() {
+  this.badges.loadBadgeData('addon--my-addon--vip', null);
+}
+```
+
+### Assigning badges to users
+
+Use `setBulk()` to give a badge to a set of user IDs all at once:
+
+```javascript
+// Give the badge to a list of Twitch user IDs (as strings)
+this.badges.setBulk(
+  'my-addon',           // source identifier — use your add-on ID
+  'addon--my-addon--vip', // the badge ID registered above
+  ['12345678', '87654321']  // array of Twitch user ID strings
+);
+```
+
+Use `extendBulk()` to append more users to an existing bulk assignment:
+
+```javascript
+this.badges.extendBulk('my-addon', 'addon--my-addon--vip', '11111111');
+```
+
+To remove all users for a source:
+
+```javascript
+this.badges.deleteBulk('my-addon', 'addon--my-addon--vip');
+```
+
+<Warning>
+Badge IDs that belong to your add-on should contain your add-on ID. In development mode FFZ will log a warning to the console if you call `loadBadgeData()` with an ID that does not contain your add-on ID.
+</Warning>
+
+---
+
+## Emote sets
+
+Emotes are managed by `chat.emotes` (`src/modules/chat/emotes.js`). Load emote set data with `loadSetData()`.
+
+### Loading an emote set
+
+```javascript
+async onEnable() {
+  this.emotes.loadSetData('my-addon--global', {
+    // Human-readable name shown in the emote picker.
+    title: 'My Add-on Emotes',
+
+    // Optional: descriptive source label
+    source: 'My Add-on',
+
+    // Array of emote objects.
+    emotes: [
+      {
+        id: 1001,
+        name: 'myAddonPog',
+        urls: {
+          1: 'https://example.com/emotes/myaddonpog/1x.png',
+          2: 'https://example.com/emotes/myaddonpog/2x.png',
+          4: 'https://example.com/emotes/myaddonpog/4x.png',
+        },
+        width: 28,
+        height: 28,
+      },
+    ],
+  });
+}
+
+async onDisable() {
+  // Pass null as the second argument to unload the set.
+  this.emotes.loadSetData('my-addon--global', null);
+}
+```
+
+### Making the set available to users
+
+Loading the data registers the emote set in FFZ's internal registry, but you also need to associate it with a provider and/or user context. Use `addDefaultSet()` to make the set available globally (all users):
+
+```javascript
+this.emotes.addDefaultSet('my-addon', 'my-addon--global');
+```
+
+To remove it:
+
+```javascript
+this.emotes.removeDefaultSet('my-addon', 'my-addon--global');
+```
+
+<Warning>
+Emote set IDs should include your add-on ID. In development mode FFZ logs a warning if `loadSetData()` is called with an ID that does not contain the add-on ID.
+</Warning>
+
+---
+
+## Link providers
+
+A **link provider** intercepts link tokens in chat and provides resolved metadata used in link tooltips. The provider receives the URL and returns data in FFZ's rich-token format.
+
+```javascript
+const MY_LINK_PROVIDER = {
+  type: 'my-addon--links',
+  priority: 10,
+
+  // test() is called for every link token.
+  // Return a truthy value (e.g. a regex match) if your provider handles this URL.
+  test(url) {
+    return /^https:\/\/example\.com\//.exec(url);
+  },
+
+  // process() is called when test() returns truthy.
+  // match: the return value of test()
+  // Return the resolved link data object, or a Promise of one.
+  process(match, url) {
+    return fetch(`https://api.example.com/oembed?url=${encodeURIComponent(url)}`)
+      .then(r => r.json());
+  },
+};
+
+async onEnable() {
+  this.chat.addLinkProvider(MY_LINK_PROVIDER);
+}
+
+async onDisable() {
+  this.chat.removeLinkProvider(MY_LINK_PROVIDER);
+}
+```
+
+---
+
+## Rich providers
+
+A **rich provider** renders an inline content block (card) below a matching chat message. Use these for clips, videos, or any embeddable content.
+
+```javascript
+const MY_RICH_PROVIDER = {
+  type: 'my-addon--rich',
+  priority: 10,
+
+  // Whether the matching link token can be hidden when rich content is shown.
+  can_hide_token: true,
+
+  // test() receives a token and the message object.
+  // Return true if this provider should handle this token.
+  test(token, msg) {
+    return token.type === 'link' && /example\.com/.test(token.url);
+  },
+
+  // process() receives the matched token and a want_mid boolean.
+  // Return a rich content data object.
+  process(token, want_mid) {
+    return {
+      url: token.url,
+      // ... rich token format data
+    };
+  },
+};
+
+async onEnable() {
+  this.chat.addRichProvider(MY_RICH_PROVIDER);
+}
+
+async onDisable() {
+  this.chat.removeRichProvider(MY_RICH_PROVIDER);
+}
+```
+
+---
+
+## Full example: word-highlight tokenizer
+
+This complete example registers a tokenizer that wraps any message containing a configurable keyword in a special token type.
+
+```javascript
+import { Addon } from 'utilities/addon';
+
+class HighlightAddon extends Addon {
+  static info = {
+    id: 'highlight-addon',
+    name: 'Keyword Highlighter',
+    author: 'Me',
+    description: 'Highlights messages containing a keyword.',
+    version: '1.0.0',
+    settings: 'Add-Ons >> Keyword Highlighter',
+  };
+
+  constructor(name, parent) {
+    super(name, parent);
+    this.inject('chat');
+
+    // Pre-bind the tokenizer so we can remove it cleanly.
+    this._tokenizer = {
+      type: 'highlight-addon--keyword',
+      priority: 5,
+      process: this._process.bind(this),
+    };
+  }
+
+  async onEnable() {
+    this.settings.add('highlight-addon.keyword', {
+      default: '!winner',
+      ui: {
+        path: 'Add-Ons >> Keyword Highlighter',
+        title: 'Keyword to highlight',
+        component: 'setting-text-box',
+      },
+    });
+
+    this.chat.addTokenizer(this._tokenizer);
+  }
+
+  async onDisable() {
+    this.chat.removeTokenizer(this._tokenizer);
+  }
+
+  _process(tokens, msg) {
+    const keyword = this.settings.get('highlight-addon.keyword');
+    if (!keyword) return;
+
+    const out = [];
+    for (const token of tokens) {
+      if (token.type === 'text' && token.text.includes(keyword)) {
+        out.push({ type: 'highlight-addon--keyword', text: token.text, keyword });
+      } else {
+        out.push(token);
+      }
+    }
+    return out;
+  }
+}
+
+HighlightAddon.register();
+```

@@ -1,0 +1,155 @@
+---
+title: Getting Started
+description: A complete step-by-step guide to building and registering your first FrankerFaceZ add-on.
+---
+
+This guide walks you through creating a minimal but complete add-on that defines a setting and logs a message to the console when it is enabled.
+
+<Note>
+All code examples use modern JavaScript/TypeScript. The official Add-Ons repository uses webpack with Babel, so both `.js` and `.ts` entry points work.
+</Note>
+
+## Prerequisites
+
+- Node.js 16+ and npm/yarn
+- A copy of the [FrankerFaceZ Add-Ons starter](https://github.com/FrankerFaceZ/Add-Ons) (or your own webpack setup)
+- FFZ installed in your browser with _Use Local Development Server_ enabled
+
+## Project structure
+
+A minimal add-on project looks like this:
+
+```
+my-addon/
+├── package.json
+├── webpack.config.js
+└── src/
+    └── index.js   ← entry point
+```
+
+## Step 1 — Write the add-on class
+
+Create `src/index.js`:
+
+```javascript
+import { Addon } from 'utilities/addon';
+
+class MyAddon extends Addon {
+
+  // Static metadata — shown in the FFZ control center Add-Ons panel.
+  static info = {
+    id: 'my-addon',
+    name: 'My First Add-on',
+    author: 'YourName',
+    description: 'A minimal example add-on for FrankerFaceZ.',
+    version: '1.0.0',
+    website: 'https://github.com/yourname/my-addon',
+  };
+
+  async onEnable() {
+    // this.log is a Logger scoped to this module.
+    this.log.info('My add-on is enabled!');
+
+    // this.settings is automatically injected by the Addon base class.
+    this.settings.add('my-addon.show-greeting', {
+      default: true,
+      ui: {
+        path: 'Add-Ons >> My Add-on',
+        title: 'Show greeting in console',
+        description: 'Logs a greeting message when chat loads.',
+        component: 'setting-check-box',
+      },
+    });
+
+    if (this.settings.get('my-addon.show-greeting')) {
+      this.log.info('Hello from My Add-on!');
+    }
+  }
+
+  async onDisable() {
+    this.log.info('My add-on is disabled.');
+  }
+}
+
+// Register with FFZ. Must be called after the class is defined.
+MyAddon.register();
+```
+
+<Steps>
+  <Step title="Define static info">
+    The `static info` object provides metadata displayed in the control center. At minimum you need `id`, `name`, `author`, and `description`. See [Addon Class API](/addons/addon-class) for all available fields.
+  </Step>
+  <Step title="Implement onEnable">
+    `onEnable` is called when the user enables your add-on (or on page load if already enabled). This is where you register settings, hook into chat, and start your logic.
+  </Step>
+  <Step title="Implement onDisable (optional but recommended)">
+    If you define `onEnable`, you should also define `onDisable` so your add-on can be toggled off cleanly. FFZ will refuse to disable a module that has `onEnable` but no `onDisable`.
+  </Step>
+  <Step title="Call MyAddon.register()">
+    `register()` is a static method inherited from `Addon`. It looks up `window.FrankerFaceZ.get()`, calls `ffz.register('addon.my-addon', MyAddon)`, and signals the `AddonManager` to enable the class. **This must be the last line in your entry point.**
+  </Step>
+</Steps>
+
+## Step 2 — Configure webpack
+
+Your bundle must target the browser and expose `Addon` from the FFZ source tree. A minimal `webpack.config.js`:
+
+```javascript
+const path = require('path');
+
+module.exports = {
+  entry: './src/index.js',
+  output: {
+    filename: 'my-addon.js',
+    path: path.resolve(__dirname, 'dist'),
+  },
+  resolve: {
+    alias: {
+      // Point to your local FFZ source checkout, or use the npm package.
+      'utilities/addon': path.resolve(__dirname, '../FrankerFaceZ/src/utilities/addon.ts'),
+    },
+  },
+  mode: 'development',
+};
+```
+
+<Tip>
+The official Add-Ons repository already sets up these aliases for you. If you clone that repo and add your add-on under `src/`, the build tooling works out of the box.
+</Tip>
+
+## Step 3 — Serve locally
+
+Build and serve your bundle on port 8001:
+
+```bash
+npm run build -- --watch
+npx http-server dist/ -p 8001 --cors
+```
+
+In Twitch, open the FFZ control center, go to **Add-Ons >> Development**, and enable **Use Local Development Server**. FFZ will attempt to load add-ons from `http://localhost:8001`.
+
+## Step 4 — Enable your add-on
+
+Navigate to **Add-Ons** in the FFZ control center. Your add-on should appear in the list (FFZ fetches the manifest from your dev server). Toggle it on. Open the browser console — you should see:
+
+```
+[FFZ:addon.my-addon] My add-on is enabled!
+[FFZ:addon.my-addon] Hello from My Add-on!
+```
+
+## What's next
+
+<CardGroup cols={2}>
+  <Card title="Addon Class API" icon="code" href="/addons/addon-class">
+    Learn about all static info fields, inject(), and register().
+  </Card>
+  <Card title="Settings API" icon="sliders" href="/addons/settings-api">
+    Define complex settings and react to changes.
+  </Card>
+  <Card title="Module Lifecycle" icon="rotate" href="/addons/module-lifecycle">
+    Go deeper on load vs. enable and dependency management.
+  </Card>
+  <Card title="Chat Integration" icon="comments" href="/addons/chat-integration">
+    Add tokenizers, custom badges, and emote sets.
+  </Card>
+</CardGroup>

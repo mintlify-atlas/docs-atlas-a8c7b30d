@@ -1,0 +1,471 @@
+---
+title: EventEmitter
+description: FrankerFaceZ's custom event system — priority-ordered listeners, TTL-limited listeners, propagation control, and Promise-based waiting.
+---
+
+FrankerFaceZ ships its own event emitter rather than using Node's `EventEmitter`. It supports priority-ordered listeners, listeners that auto-remove themselves, `StopPropagation`, and a `Promise`-based `waitFor` API.
+
+There are three classes in the hierarchy:
+
+| Class | Description |
+|---|---|
+| `EventEmitter` | Base. Flat event map, no path concept. |
+| `HierarchicalEventEmitter` | Adds a tree of named emitters sharing one listener pool. |
+| `Module` | Extends `HierarchicalEventEmitter` with lifecycle and DI. |
+
+In practice you will always interact with events through a `Module` instance. The API below documents all three layers.
+
+```typescript
+import EventEmitter, {
+  Detach,
+  StopPropagation,
+  FFZEvent,
+  FFZWaitableEvent,
+} from 'utilities/events';
+// or
+const { events } = FrankerFaceZ.utilities;
+```
+
+---
+
+## Special Symbols
+
+### `Detach`
+
+```typescript
+export const Detach: unique symbol;
+```
+
+Return `Detach` from an event listener to unsubscribe it automatically after it fires.
+
+```typescript
+this.on('settings:changed', (key, value) => {
+  if (key !== 'my.setting') return;
+  this.doSomething(value);
+  return Detach; // stop receiving this event
+});
+```
+
+Also available as `EventEmitter.Detach` and `Module.Detach`.
+
+### `StopPropagation`
+
+```typescript
+export const StopPropagation: unique symbol;
+```
+
+Return `StopPropagation` from an event listener to prevent all subsequent listeners from receiving the same event. Only affects listeners for the current `emit()` call.
+
+```typescript
+this.on('chat:intercept', (msg) => {
+  if (shouldBlock(msg)) {
+    return StopPropagation; // no other listeners will run
+  }
+});
+```
+
+Also available as `EventEmitter.StopPropagation` and `Module.StopPropagation`.
+
+<Note>
+  `StopPropagation` can also be triggered via `event.stopPropagation()` when using `FFZEvent` objects (see below).
+</Note>
+
+---
+
+## Types
+
+```typescript
+// The return type allowed from a listener.
+export type ListenerReturnType =
+  | void
+  | typeof Detach
+  | typeof StopPropagation
+  | Promise<void>;
+
+// A listener function.
+export type EventListener<TArgs extends any[] = any[]> =
+  (...args: TArgs) => ListenerReturnType;
+
+// Internal tuple stored per listener.
+export type ListenerInfo<TArgs extends any[] = any[]> = [
+  listener: EventListener<TArgs>,
+  context: any,
+  ttl: number | false,   // false = unlimited
+  priority: number,
+  prepend: boolean
+];
+
+// An event map: event name → tuple of argument types.
+export interface EventMap {
+  [event: string]: any[];
+}
+```
+
+---
+
+## `EventEmitter` Class
+
+### `on()`
+
+```typescript
+on<K extends EventKey>(
+  event: K,
+  fn: EventListener<EventArgs[K]>,
+  ctx?: any,
+  priority?: number,
+  prepend?: boolean
+): this
+```
+
+Register a persistent event listener.
+
+<ParamField path="event" type="string" required>
+  The event key to listen for.
+</ParamField>
+
+<ParamField path="fn" type="EventListener" required>
+  The listener function.
+</ParamField>
+
+<ParamField path="ctx" type="any" optional>
+  The `this` context for the listener. On `Module`, defaults to `this` when omitted.
+</ParamField>
+
+<ParamField path="priority" type="number" optional>
+  Numeric priority. Lower numbers run first. Default is `0`.
+</ParamField>
+
+<ParamField path="prepend" type="boolean" optional>
+  When `true`, the listener is inserted at the front of the list before sorting by priority. Default is `false`.
+</ParamField>
+
+```typescript
+module.on('chat:message', (msg) => {
+  console.log('New message:', msg);
+});
+
+// High-priority listener that runs before others at the same priority:
+module.on('chat:message', handler, this, -100);
+```
+
+---
+
+### `once()`
+
+```typescript
+once<K extends EventKey>(
+  event: K,
+  fn: EventListener<EventArgs[K]>,
+  ctx?: any,
+  priority?: number,
+  prepend?: boolean
+): this
+```
+
+Register a listener that fires exactly **once** then removes itself. Equivalent to `many(event, 1, fn, ...)`.
+
+```typescript
+module.once('settings:ready', () => {
+  console.log('Settings loaded for the first time.');
+});
+```
+
+---
+
+### `many()`
+
+```typescript
+many<K extends EventKey>(
+  event: K,
+  ttl: number,
+  fn: EventListener<EventArgs[K]>,
+  ctx?: any,
+  priority?: number,
+  prepend?: boolean
+): this
+```
+
+Register a listener that fires at most `ttl` times before being automatically removed.
+
+<ParamField path="ttl" type="number" required>
+  The number of times the listener should fire. Must be a positive, finite integer.
+</ParamField>
+
+```typescript
+// Only handle the first three badge updates:
+module.many('chat.badges:updated', 3, (data) => {
+  console.log('Badge update:', data);
+});
+```
+
+---
+
+### `waitFor()`
+
+```typescript
+waitFor<K extends EventKey>(
+  event: K,
+  ctx?: any,
+  priority?: number,
+  prepend?: boolean
+): Promise<EventArgs[K]>
+```
+
+Returns a `Promise` that resolves with the argument tuple of the **next** firing of `event`. Internally registers a `ttl=1` listener.
+
+<ResponseField name="return" type="Promise<args[]>">
+  Resolves with the array of arguments passed to the next emission of the event.
+</ResponseField>
+
+```typescript
+// Wait for a module to become enabled:
+await module.waitFor(':enabled');
+console.log('Module is now enabled.');
+
+// Wait and destructure arguments:
+const [key, value] = await this.waitFor('settings:changed');
+```
+
+---
+
+### `off()`
+
+```typescript
+off<K extends EventKey>(
+  event?: K,
+  fn?: EventListener,
+  ctx?: any
+): this
+```
+
+Remove one or more event listeners. At least one of `event`, `fn`, or `ctx` must be provided.
+
+| Arguments provided | Effect |
+|---|---|
+| `event` only | Remove **all** listeners for that event. |
+| `fn` only | Remove all listeners using that function (any event). |
+| `ctx` only | Remove all listeners registered with that context (any event). |
+| `event` + `fn` | Remove listeners matching both. |
+| `event` + `ctx` | Remove listeners for that event from that context. |
+| `event` + `fn` + `ctx` | Remove the specific listener matching all three. |
+
+```typescript
+// Remove a specific listener:
+module.off('chat:message', myHandler, this);
+
+// Remove all listeners from this context:
+module.off(undefined, undefined, this);
+
+// Remove all listeners for an event:
+module.off('chat:message');
+```
+
+<Warning>
+  Calling `off()` while an event is currently being emitted (i.e., inside a listener for that event) throws a concurrent modification error.
+</Warning>
+
+---
+
+### `emit()`
+
+```typescript
+emit<K extends EventKey>(
+  event: K,
+  ...data: EventArgs[K]
+): void
+```
+
+Emit an event, calling all registered listeners in priority order.
+
+- Listeners with a `ttl` have their count decremented; they are removed when it reaches zero.
+- A listener returning `Detach` is removed after it fires.
+- A listener returning `StopPropagation` stops iteration.
+- If the first argument is an `FFZEvent`, `event.propagationStopped` also stops iteration.
+- If the first argument is an `FFZWaitableEvent` and a listener returns a `Promise`, it is registered via `event.waitFor(promise)`.
+
+```typescript
+// Simple emit:
+this.emit(':updated', payload);
+
+// Emit with an FFZEvent for two-way communication:
+const event = this.makeEvent({ user: 'someone' });
+this.emit(':check-user', event);
+if (event.defaultPrevented) {
+  // a listener called event.preventDefault()
+}
+```
+
+---
+
+### `events()`
+
+```typescript
+events(): string[]
+```
+
+Returns all event keys that currently have at least one listener.
+
+---
+
+### `listeners()`
+
+```typescript
+listeners<K extends EventKey>(event: K): ListenerInfo[]
+```
+
+Returns a snapshot of all `ListenerInfo` tuples for the given event.
+
+---
+
+### `hasListeners()`
+
+```typescript
+hasListeners<K extends EventKey>(event: K): boolean
+```
+
+Returns `true` if there is at least one listener registered for `event`.
+
+---
+
+### `transferListeners()`
+
+```typescript
+transferListeners(other: EventEmitter): void
+```
+
+Move all listeners from this emitter to `other`, clearing them from `this`. Useful when replacing an emitter instance.
+
+<Note>
+  This method throws on `HierarchicalEventEmitter` (and therefore `Module`) because hierarchical emitters share their parent's listener pool — transferring is not meaningful.
+</Note>
+
+---
+
+## `HierarchicalEventEmitter` Class
+
+`HierarchicalEventEmitter` extends `EventEmitter` to support a tree of named emitters that share a single listener pool.
+
+### Properties
+
+<ParamField path="name" type="string">
+  The local name of this emitter (its segment in the path, not the full path).
+</ParamField>
+
+<ParamField path="path" type="string">
+  The full dot-separated path, e.g. `"chat.emotes"`.
+</ParamField>
+
+<ParamField path="parent" type="HierarchicalEventEmitter | undefined">
+  The parent emitter.
+</ParamField>
+
+<ParamField path="root" type="HierarchicalEventEmitter">
+  The root emitter (the `FrankerFaceZ` instance).
+</ParamField>
+
+### `abs_path()`
+
+```typescript
+abs_path(path: string): string
+```
+
+Resolve a potentially relative path into an absolute path. Used internally by all event and module-lookup methods.
+
+| Input (from `chat.emotes`) | Output |
+|---|---|
+| `':update-sets'` | `'chat.emotes:update-sets'` |
+| `'.'` | `'chat.emotes'` |
+| `'..'` | `'chat'` |
+| `'..emoji'` | `'chat.emoji'` |
+| `'..:other-event'` | `'chat:other-event'` |
+| `'settings'` | `'settings'` (absolute, unchanged) |
+
+### `events()`
+
+```typescript
+events(): string[]
+```
+
+Returns only event keys owned by **this** emitter (those that start with this emitter's path and are separated by `:`). Does not include descendant events.
+
+### `eventsWithChildren()`
+
+```typescript
+eventsWithChildren(): string[]
+```
+
+Like `events()` but also includes events from descendant emitters.
+
+---
+
+## `FFZEvent` Class
+
+A convenience wrapper for two-way event communication. Modeled after the DOM `Event` interface.
+
+```typescript
+export class FFZEvent<TData> {
+  defaultPrevented: boolean;
+  propagationStopped: boolean;
+
+  static makeEvent<TData extends Record<string, any>>(data: TData): FFZEvent<TData> & TData
+
+  stopPropagation(): void
+  preventDefault(): void
+  _reset(): void  // emitter-internal use only
+}
+```
+
+Create instances via `makeEvent()` (or `this.makeEvent()` on a module) to get proper type inference:
+
+```typescript
+const event = this.makeEvent({ channel: 'ffz', forced: false });
+this.emit(':process-channel', event);
+
+if (event.defaultPrevented) {
+  // at least one listener cancelled this action
+}
+```
+
+---
+
+## `FFZWaitableEvent` Class
+
+Extends `FFZEvent` to support asynchronous event listeners.
+
+```typescript
+export class FFZWaitableEvent<TData, TReturn = void> extends FFZEvent<TData> {
+  static makeEvent<TData, TReturn>(data: TData): FFZWaitableEvent<TData, TReturn> & TData
+
+  waitFor(promise: Promise<TReturn>): void
+  _wait(): Promise<Awaited<TReturn>[]> | null  // emitter-internal use only
+  _reset(): void
+}
+```
+
+Listeners may either `return` a Promise directly or call `event.waitFor(promise)`. The emitter is responsible for calling `event._wait()` afterwards.
+
+```typescript
+const event = this.makeWaitableEvent<{ url: string }, string>({ url });
+this.emit(':resolve-url', event);
+const results = await event._wait();
+// results: string[] — resolved values from all async listeners
+```
+
+---
+
+## Priority Reference
+
+Listeners are sorted by their `priority` value in ascending order. Lower numbers run **first**.
+
+| Priority | Convention |
+|---|---|
+| `-1000` | Very early — framework internals |
+| `-100` to `-1` | Early — pre-processing |
+| `0` | Default |
+| `1` to `100` | Late — post-processing |
+| `1000` | Very late — final handlers |
+
+```typescript
+// Run this handler before all default handlers:
+this.on('chat:message', handler, this, -50);
+```

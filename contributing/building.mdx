@@ -1,0 +1,111 @@
+---
+title: Building
+description: Build commands for FrankerFaceZ — production and development builds, the browser extension build, webpack configuration, and output targets.
+---
+
+FrankerFaceZ uses webpack 5 with esbuild for transpilation. The webpack configuration is in `webpack.config.js` at the repository root.
+
+## Build commands
+
+| Command | Description |
+|---|---|
+| `pnpm build` | Production build (alias for `pnpm build:prod`) |
+| `pnpm build:prod` | Production build with `NODE_ENV=production` |
+| `pnpm build:dev` | Development build with `NODE_ENV=development` |
+| `pnpm build:ext` | Production browser extension build (`FFZ_EXTENSION=true`) |
+| `pnpm build:stats` | Production build that writes `stats.json` for bundle analysis |
+| `pnpm dev` / `pnpm start` | Webpack dev server (watch mode, `NODE_ENV=development`) |
+| `pnpm dev:prod` | Dev server in production mode |
+| `pnpm dev:ext` | Dev server for the browser extension build |
+| `pnpm clean` | Delete the `dist/` output directory |
+
+## Entry points
+
+Webpack compiles the following entry points regardless of build target:
+
+| Name | Source | Description |
+|---|---|---|
+| `avalon` | `src/main.ts` | Main FFZ client loaded on Twitch pages |
+| `bridge` | `src/bridge.js` | Bridge script injected by the userscript or extension |
+| `esbridge` | `src/esbridge.js` | ES module variant of the bridge |
+| `player` | `src/player.js` | Standalone player enhancement module |
+| `clips` | `src/clips.js` | Clips page module |
+
+When building the browser extension (`FFZ_EXTENSION=true`), an additional entry point is added:
+
+| Name | Source | Description |
+|---|---|---|
+| `worker` | `src/worker.ts` | Extension service worker |
+
+## Public path
+
+The public path changes based on the build target:
+
+```js
+const FILE_PATH = DEV_SERVER
+	? 'https://localhost:8000/script/'
+	: FOR_EXTENSION
+		? ''
+		: 'https://cdn2.frankerfacez.com/static/';
+```
+
+- **Dev server** — chunks are served from `https://localhost:8000/script/`
+- **Extension** — empty public path (files are relative within the extension package)
+- **Production** — files are served from `https://cdn2.frankerfacez.com/static/`
+
+## Development vs production
+
+<Tabs>
+  <Tab title="Development">
+    - `mode: 'development'`
+    - `devtool: 'inline-source-map'` — source maps embedded in each file
+    - Entry script output: `script.js`
+    - No minification
+  </Tab>
+  <Tab title="Production">
+    - `mode: 'production'`
+    - No inline source maps
+    - Entry script output: `script.min.js`
+    - Minification via `EsbuildPlugin`
+  </Tab>
+</Tabs>
+
+## Webpack plugins
+
+| Plugin | Purpose |
+|---|---|
+| `VueLoaderPlugin` | Processes `.vue` single-file components |
+| `EsbuildPlugin` (minimizer) | Minifies JS in production builds, targeting `es2020` |
+| `WebpackManifestPlugin` | Emits an asset manifest for cache-busting |
+| `CopyPlugin` | Copies the userscript entry file (`entry.js` or `entry_ext.js`) to the output as `script.js` / `script.min.js` |
+| `CycloneDxWebpackPlugin` | Generates a CycloneDX SBOM alongside the build |
+
+## Loaders
+
+| Loader | File types | Purpose |
+|---|---|---|
+| `esbuild-loader` | `.js`, `.jsx`, `.ts`, `.tsx` | Transpiles JavaScript and TypeScript to ES2020 |
+| `vue-loader` | `.vue` | Handles Vue 2 single-file components |
+| `sass-loader` + `css-loader` | `.scss`, `.css` | Compiles SCSS to CSS |
+| `raw-loader` | — | Imports files as raw strings |
+| `json-loader` | `.json` | Imports JSON files |
+| `minify-graphql-loader` | `.gql` | Minifies inline GraphQL query files |
+| `file-loader` | Images, fonts | Emits files and returns their URL |
+
+## Browser extension build
+
+Passing `FFZ_EXTENSION=true` (via `pnpm build:ext` or `pnpm dev:ext`) makes the following changes:
+
+- Adds the `worker` entry point (`src/worker.ts`)
+- Copies `src/entry_ext.js` as the entry script instead of `src/entry.js`
+- Sets the public path to `''` so all asset references are relative
+
+## Type declarations
+
+FFZ ships TypeScript type declarations for its public API. To regenerate them:
+
+```bash
+pnpm build:types
+```
+
+This runs `tsc` to emit declaration files into `typedist/`, then runs `bin/build_types` to post-process them.

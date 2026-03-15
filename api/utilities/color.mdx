@@ -1,0 +1,228 @@
+---
+title: Color Utilities
+description: API reference for the FrankerFaceZ color system — Color class, color space representations, parsing, conversion, and manipulation.
+---
+
+## Overview
+
+The color module provides immutable color value objects in four color spaces (RGBA, HSVA, HSLA, XYZA/LUVA), along with parsing, serialization, and visual manipulation helpers.
+
+```typescript
+import { Color, RGBAColor, HSVAColor, HSLAColor } from 'utilities/color';
+// or from an add-on:
+const { Color } = FrankerFaceZ.utilities.color;
+```
+
+<Note>
+  All color objects are **immutable**. Manipulation methods return a new instance rather than modifying the original.
+</Note>
+
+---
+
+## `BaseColor` interface
+
+All concrete color types implement `BaseColor`.
+
+```typescript
+interface BaseColor {
+  eq(other: BaseColor | null | undefined, ignoreAlpha?: boolean): boolean;
+
+  toCSS(): string;
+  toHex(): string;
+
+  toRGBA(): RGBAColor;
+  toHSVA(): HSVAColor;
+  toHSLA(): HSLAColor;
+  toXYZA(): XYZAColor;
+  toLUVA(): LUVAColor;
+}
+```
+
+---
+
+## `RGBAColor`
+
+Represents a color as red, green, blue (0–255) and alpha (0–1).
+
+### Constructor
+
+```typescript
+new RGBAColor(r: number, g: number, b: number, a?: number)
+```
+
+### Properties
+
+<ResponseField name="r" type="number">Red channel, 0–255.</ResponseField>
+<ResponseField name="g" type="number">Green channel, 0–255.</ResponseField>
+<ResponseField name="b" type="number">Blue channel, 0–255.</ResponseField>
+<ResponseField name="a" type="number">Alpha channel, 0–1.</ResponseField>
+
+### Static factory methods
+
+| Method | Description |
+|---|---|
+| `RGBAColor.fromCSS(input)` | Parse any CSS color string (hex, named color, `rgba(...)`) |
+| `RGBAColor.fromHex(input)` | Parse a hex string (`#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`) |
+| `RGBAColor.fromName(name)` | Parse a CSS named color using a canvas context |
+| `RGBAColor.fromHSVA(h, s, v, a?)` | Convert from HSVA |
+| `RGBAColor.fromHSLA(h, s, l, a?)` | Convert from HSLA |
+| `RGBAColor.fromXYZA(x, y, z, a?)` | Convert from CIE XYZ |
+
+### Instance methods
+
+```typescript
+// Immutable channel setters (return a new RGBAColor)
+color._r(r: number): RGBAColor
+color._g(g: number): RGBAColor
+color._b(b: number): RGBAColor
+color._a(a: number): RGBAColor
+
+// Serialization
+color.toCSS(): string    // hex for opaque, rgba() for transparent
+color.toHex(): string    // always #rrggbb
+
+// Color space conversion
+color.toRGBA(): RGBAColor
+color.toHSVA(): HSVAColor
+color.toHSLA(): HSLAColor
+color.toXYZA(): XYZAColor
+color.toLUVA(): LUVAColor
+
+// Analysis
+color.luminance(): number   // relative luminance (WCAG)
+color.get_Y(): number       // luma (quick approximation)
+
+// Manipulation
+color.daltonize(type: string | CVDMatrix): RGBAColor
+```
+
+#### `daltonize(type)`
+
+Simulates and compensates for color vision deficiency (CVD) using the Daltonization algorithm.
+
+<ParamField path="type" type="string | CVDMatrix">
+  A named CVD type key from `Color.CVDMatrix` (e.g. `"protanopia"`, `"deuteranopia"`, `"tritanopia"`) or a raw 3×3 matrix as a 9-element tuple.
+</ParamField>
+
+---
+
+## `HSVAColor`
+
+Hue (0–1), Saturation (0–1), Value (0–1), Alpha (0–1).
+
+### Constructor
+
+```typescript
+new HSVAColor(h: number, s: number, v: number, a?: number)
+```
+
+### Static factory
+
+```typescript
+HSVAColor.fromRGBA(r: number, g: number, b: number, a?: number): HSVAColor
+```
+
+### Immutable setters
+
+```typescript
+color._h(h: number): HSVAColor
+color._s(s: number): HSVAColor
+color._v(v: number): HSVAColor
+color._a(a: number): HSVAColor
+```
+
+---
+
+## `HSLAColor`
+
+Hue (0–1), Saturation (0–1), Lightness (0–1), Alpha (0–1).
+
+### Constructor
+
+```typescript
+new HSLAColor(h: number, s: number, l: number, a?: number)
+```
+
+### Static factory
+
+```typescript
+HSLAColor.fromRGBA(r: number, g: number, b: number, a?: number): HSLAColor
+```
+
+### Immutable setters
+
+```typescript
+color._h(h: number): HSLAColor
+color._s(s: number): HSLAColor
+color._l(l: number): HSLAColor
+color._a(a: number): HSLAColor
+```
+
+---
+
+## `Color` (namespace object)
+
+`Color` is the main export and provides convenience access to the parsing API and the CVD matrices.
+
+### `Color.fromCSS(input)` / `Color.fromHex(input)`
+
+Shorthand for `RGBAColor.fromCSS` / `RGBAColor.fromHex`.
+
+```typescript
+const red = Color.fromCSS('#ff0000');
+const blue = Color.fromCSS('blue');
+const semi = Color.fromHex('#ff000080');
+```
+
+### `Color.CVDMatrix`
+
+Pre-computed 3×3 LMS-space simulation matrices for common color vision deficiencies.
+
+```typescript
+Color.CVDMatrix.protanopia   // CVDMatrix
+Color.CVDMatrix.deuteranopia // CVDMatrix
+Color.CVDMatrix.tritanopia   // CVDMatrix
+```
+
+---
+
+## Helper functions
+
+### `hue2rgb(p, q, t)`
+
+Utility used internally by HSLA → RGBA conversion.
+
+```typescript
+function hue2rgb(p: number, q: number, t: number): number
+```
+
+### `bit2linear(channel)` / `linear2bit(channel)`
+
+Convert between 8-bit (gamma-encoded) and linear light values, required for accurate luminance calculations.
+
+```typescript
+function bit2linear(channel: number): number  // 0–1 sRGB → 0–1 linear
+function linear2bit(channel: number): number  // 0–1 linear → 0–1 sRGB
+```
+
+---
+
+## Examples
+
+```typescript
+// Parse a CSS color
+const color = Color.fromCSS('#9146ff');
+console.log(color.toCSS());        // '#9146ff'
+console.log(color.luminance());    // ~0.085
+
+// Convert to HSV and reduce saturation
+const muted = color.toHSVA()._s(0.4).toRGBA();
+console.log(muted.toCSS());        // muted purple
+
+// Adjust alpha
+const translucent = color._a(0.5);
+console.log(translucent.toCSS());  // 'rgba(145,70,255,0.5)'
+
+// Compensate for deuteranopia
+const accessible = color.toRGBA().daltonize('deuteranopia');
+```

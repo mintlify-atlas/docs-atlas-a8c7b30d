@@ -1,0 +1,202 @@
+---
+title: Filtering
+description: API reference for the FrankerFaceZ rule-based filtering system — FilterType, FilterData, and createTester.
+---
+
+## Overview
+
+The filtering system lets you define composable rule types and evaluate them against an arbitrary context object. It is used by the settings system to activate profiles conditionally (e.g., "only when I'm a moderator").
+
+```typescript
+import { createTester, FilterType, FilterData } from 'utilities/filtering';
+```
+
+---
+
+## Core types
+
+### `FilterType<TConfig, TContext>`
+
+Describes one type of filter rule. Register new types with `settings.addFilter(key, filterType)`.
+
+```typescript
+export type FilterType<TConfig, TContext> = {
+  // Required: construct a test function from rule config
+  createTest: (
+    config: TConfig,
+    filter_types: FilterTypeMap<TContext>,
+    rebuild?: () => void
+  ) => (ctx: TContext) => boolean;
+
+  // Required: default config value or factory
+  default: TConfig | (() => TConfig);
+
+  // Display
+  title: string;
+  i18n?: string | null;
+  tall?: boolean;
+
+  // Constraints
+  maxRules?: number;     // Maximum number of instances
+  childRules?: boolean;  // Whether this type can contain nested rules
+
+  // Optional async editor component loader
+  editor?: () => Promise<any>;
+};
+```
+
+<ParamField path="createTest" type="function" required>
+  Called once when a profile's filter rules are compiled. Returns a **test function** `(ctx) => boolean` that will be called on every context evaluation. Returning `null` or `undefined` from `createTest` skips the rule entirely.
+</ParamField>
+
+<ParamField path="default" type="TConfig | () => TConfig" required>
+  The initial configuration value shown when a user adds a new rule of this type. Can be a static value or a zero-argument factory function.
+</ParamField>
+
+<ParamField path="title" type="string" required>
+  Human-readable name shown in the FFZ settings UI.
+</ParamField>
+
+<ParamField path="maxRules" type="number">
+  If set, prevents more than this many instances of the rule type per profile.
+</ParamField>
+
+<ParamField path="childRules" type="boolean">
+  When `true`, the rule type's config may contain nested `FilterData[]` arrays. The `filter_types` argument passed to `createTest` must be forwarded to nested `createTester` calls.
+</ParamField>
+
+---
+
+### `FilterData`
+
+The serialized form of a single rule, stored in a profile's `context` array.
+
+```typescript
+export type FilterData = {
+  id?: string;   // Optional stable identifier
+  type: string;  // Key of the FilterType
+  data: any;     // Config value passed to FilterType.createTest
+};
+```
+
+---
+
+## `createTester(rules, filter_types, inverted?, or?, rebuild?)`
+
+Compiles an array of `FilterData` rules into a single optimized test function.
+
+```typescript
+function createTester<TContext, Types extends FilterTypeMap<TContext>>(
+  rules: FilterData[] | null | undefined,
+  filter_types: Types,
+  inverted?: boolean,  // default: false — negate the final result
+  or?: boolean,        // default: false — use OR logic instead of AND
+  rebuild?: () => void // callback to request recompilation
+): (ctx: TContext) => boolean
+```
+
+<ParamField path="rules" type="FilterData[] | null | undefined" required>
+  The array of rules to compile. When `null`, `undefined`, or empty, the returned function always returns `true` (no rules = match everything) unless `inverted` is set.
+</ParamField>
+
+<ParamField path="filter_types" type="FilterTypeMap<TContext>" required>
+  A map of all registered `FilterType` objects keyed by their string identifier.
+</ParamField>
+
+<ParamField path="inverted" type="boolean">
+  When `true`, the compiled function returns the logical NOT of the combined result. Defaults to `false`.
+</ParamField>
+
+<ParamField path="or" type="boolean">
+  When `true`, rules are combined with OR logic. Defaults to `false` (AND).
+</ParamField>
+
+<ParamField path="rebuild" type="() => void">
+  An optional callback passed through to each `FilterType.createTest`. Rule types may call this to request a full recompilation when their internal state changes asynchronously.
+</ParamField>
+
+<ResponseField name="returns" type="(ctx: TContext) => boolean">
+  A compiled test function. For 0 or 1 rules the function is a direct reference (no overhead). For 2+ rules a minimal `Function` constructor is used to inline the calls.
+</ResponseField>
+
+---
+
+## Defining a custom filter type
+
+```typescript
+import type { FilterType } from 'utilities/filtering';
+import type { ContextData } from 'src/settings/types';
+
+type MyConfig = {
+  category: string;
+};
+
+const CategoryFilter: FilterType<MyConfig, ContextData> = {
+  title: 'Category',
+  i18n: 'filter.category',
+
+  default: { category: '' },
+
+  createTest(config) {
+    const target = config.category?.toLowerCase();
+    if (!target) return () => true; // no constraint
+
+    return (ctx) =>
+      ctx.category?.toLowerCase() === target;
+  },
+
+  editor: () => import('./components/CategoryEditor.vue'),
+};
+
+// Register it:
+this.settings.addFilter('Category', CategoryFilter);
+```
+
+---
+
+## Evaluating rules manually
+
+```typescript
+const rules: FilterData[] = [
+  { type: 'Moderator', data: true },
+  { type: 'Category', data: { category: 'Just Chatting' } },
+];
+
+const test = createTester(rules, this.settings.filters);
+
+const ctx = { moderator: true, category: 'Just Chatting' };
+console.log(test(ctx)); // true — both rules pass
+```
+
+---
+
+## Built-in filter types
+
+FFZ ships with several built-in filter types registered automatically in the settings system.
+
+| Key | Description |
+|---|---|
+| `Moderator` | Matches when the user is a moderator in the current channel |
+| `Category` | Matches against the current stream category/game |
+| `Channel` | Matches against the current channel name or ID |
+| `Time` | Matches against the current time of day |
+| `Monitor` | Matches against current screen/monitor properties |
+
+<Note>
+  The exact set of built-in filters may differ between FFZ versions. Inspect `settings.filters` at runtime for the current list.
+</Note>
+
+---
+
+## Usage in profiles
+
+Filter rules are stored in `SettingsProfileMetadata.context` and evaluated by `SettingsContext.selectProfiles()` whenever the context changes. You do not need to call `createTester` manually for profile activation — FFZ handles this internally.
+
+```typescript
+const profile = this.settings.createProfile({
+  name: 'Moderator Mode',
+  context: [
+    { type: 'Moderator', data: true }
+  ],
+});
+```

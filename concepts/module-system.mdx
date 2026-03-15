@@ -1,0 +1,273 @@
+---
+title: Module System
+description: The Module class — lifecycle states, dependency injection, and the resolve/inject/register API.
+---
+
+Every logical component of FrankerFaceZ is a **`Module`**. Modules have two independent state machines — load state and enable state — and declare their dependencies so the framework can orchestrate startup and shutdown order automatically.
+
+## The two state machines
+
+### Load state (`LoadState`)
+
+Load state tracks whether a module's one-time initialization work has been done.
+
+```typescript
+export enum LoadState {
+  /** The module is currently unloaded. */
+  Unloaded,
+  /**
+   * The module is waiting for its load_requires dependencies to enable,
+   * or waiting for its own onLoad() to return.
+   */
+  Loading,
+  /** The module is currently loaded. */
+  Loaded,
+  /**
+   * The module is waiting for dependents to be disabled, or waiting
+   * for its own onUnload() to return.
+   */
+  Unloading
+}
+```
+
+A module that has neither an `onLoad` method nor any `load_requires` is considered `Loaded` immediately at construction time.
+
+### Enable state (`State`)
+
+Enable state tracks the runtime active/inactive status of a module.
+
+```typescript
+export enum State {
+  /** The module is currently disabled. */
+  Disabled,
+  /**
+   * The module is waiting for its requires dependencies to enable,
+   * or waiting for its own onEnable() to return.
+   */
+  Enabling,
+  /** The module is currently enabled. */
+  Enabled,
+  /**
+   * The module is waiting for dependents to be disabled, or waiting
+   * for its own onDisable() to return.
+   */
+  Disabling
+}
+```
+
+A module that has neither an `onEnable` method nor any `load_requires` / `onLoad` is considered `Enabled` immediately.
+
+## Lifecycle hooks
+
+Override any of these methods in your subclass. All hooks support returning a `Promise`.
+
+<Tabs>
+  <Tab title="onLoad / onUnload">
+    Called once during a module's lifetime for heavy initialization or resource acquisition.
+
+    ```typescript
+    export class MyModule extends Module<'addon.my-addon'> {
+      protected async onLoad() {
+        // Runs after all load_requires are enabled.
+        // Injected module references are available here.
+        this.data = await fetchSomeData();
+      }
+
+      protected async onUnload() {
+        // Must be defined if onLoad is defined and you want the
+        // module to be unloadable at runtime.
+        this.data = null;
+      }
+    }
+    ```
+
+    <Warning>
+      If you define `onLoad` but not `onUnload`, the module cannot be unloaded at runtime — calls to `unload()` will throw a `ModuleError`.
+    </Warning>
+  </Tab>
+  <Tab title="onEnable / onDisable">
+    Called each time the module transitions between active and inactive.
+
+    ```typescript
+    export class MyModule extends Module<'addon.my-addon'> {
+      protected async onEnable() {
+        // All requires are enabled; safe to start work.
+        this.chat.on(':message', this.handleMessage, this);
+      }
+
+      protected async onDisable() {
+        // Must be defined if onEnable is defined.
+        this.chat.off(':message', this.handleMessage, this);
+      }
+    }
+    ```
+
+    <Warning>
+      If you define `onEnable` but not `onDisable`, calling `disable()` will throw a `ModuleError`.
+    </Warning>
+  </Tab>
+</Tabs>
+
+### Lifecycle order
+
+<Steps>
+  <Step title="load()">
+    All `load_requires` modules are **enabled**. Then `onLoad()` is called. The module transitions from `Unloaded` → `Loading` → `Loaded`.
+  </Step>
+  <Step title="enable()">
+    The module is loaded first (if not already). All `requires` modules are enabled in parallel. Then `onEnable()` is called. The module transitions from `Disabled` → `Enabling` → `Enabled`.
+  </Step>
+  <Step title="disable()">
+    All modules that listed this module in their `requires` (i.e., `dependents`) are disabled first. Then `onDisable()` is called. The module transitions from `Enabled` → `Disabling` → `Disabled`.
+  </Step>
+  <Step title="unload()">
+    The module is disabled first (if enabled). All modules that listed this module in their `load_requires` (i.e., `load_dependents`) are unloaded first. Then `onUnload()` is called. The module transitions from `Loaded` → `Unloading` → `Unloaded`.
+  </Step>
+</Steps>
+
+## `load_requires` vs `requires`
+
+| Property | Phase | Effect |
+|---|---|---|
+| `load_requires` | `onLoad` | Listed modules are **enabled** before `onLoad` is called. Typically used for modules that provide data used during initialization. |
+| `requires` | `onEnable` | Listed modules are **enabled** before `onEnable` is called. Typically used for modules that are needed at runtime. |
+
+Both properties can be declared as class-static arrays or as instance properties.
+
+```typescript
+export class MyModule extends Module<'addon.my-addon'> {
+  // Ensure 'settings' and 'i18n' are enabled before onLoad runs:
+  static load_requires = ['settings', 'i18n'];
+
+  // Ensure 'chat' is enabled before onEnable runs:
+  static requires = ['chat'];
+}
+```
+
+## `should_enable`
+
+Modules that are direct children of `core` or `site` can set this flag to `true` to be enabled automatically during FFZ startup, after the root module has been enabled.
+
+```typescript
+export default class MyFeature extends Module {
+  should_enable = true;
+
+  protected onEnable() {
+    // Called automatically at startup
+  }
+}
+```
+
+## Dependency injection
+
+### `inject(name, ModuleClass?, require?)`
+
+Registers a module class as a child and assigns the resulting instance to `this[name]`. Also adds the module to `this.requires` so it will be enabled before `onEnable`.
+
+```typescript
+export default class Root extends Addon {
+  constructor(name: string, parent: GenericModule) {
+    super(name, parent);
+
+    // Register ChatHelper as a child module and inject it.
+    // this.chat_helper will be a ChatHelper instance.
+    this.inject('chat_helper', ChatHelper);
+
+    // Inject an already-registered module by path.
+    // Useful for accessing FFZ core modules.
+    this.inject('settings');
+    this.inject('chat');
+  }
+}
+```
+
+<Note>
+  The `name` argument is converted to snake_case automatically when deriving it from a class name. `ChatHelper` becomes `chat_helper`.
+</Note>
+
+### `injectAs(variable, name, ModuleClass?, require?)`
+
+Like `inject()`, but stores the result under a different property name than the module's registered name.
+
+```typescript
+this.injectAs('site_chat', 'site.chat');
+// this.site_chat now holds the site.chat module
+```
+
+### `register(name, ModuleClass, inject_reference?)`
+
+Registers a module class as a child **without** adding it to `requires`. The module will not be enabled automatically — you must call `enable()` on it manually when needed. Pass `true` as the third argument to also assign the instance to `this[name]`.
+
+```typescript
+// Register but do not require or assign:
+const inst = this.register('lazy_feature', LazyFeature);
+
+// Register and assign to this.lazy_feature:
+this.register('lazy_feature', LazyFeature, true);
+```
+
+### `resolve(path)`
+
+Looks up an already-registered module by path and returns it, or `null` if it is not registered. Resolves add-on proxies automatically for add-on modules.
+
+```typescript
+const settings = this.resolve('settings');   // → SettingsManager | null
+const chat     = this.resolve('chat');        // → Chat | null
+```
+
+<Tip>
+  `resolve()` is typed against `ModuleMap` from `utilities/types.ts`, so known paths return their concrete module type.
+</Tip>
+
+## State inspection
+
+```typescript
+module.load_state  // LoadState enum value
+module.state       // State enum value
+
+module.loaded      // true when load_state === LoadState.Loaded
+module.loading     // true when load_state === LoadState.Loading
+module.enabled     // true when state === State.Enabled
+module.enabling    // true when state === State.Enabling
+
+module.canUnload() // false if onLoad exists but onUnload does not,
+                   // or if any dependents cannot unload
+module.canDisable() // false if onEnable exists but onDisable does not,
+                    // or if any dependents cannot disable
+```
+
+## Module events
+
+Every module automatically emits these lifecycle events. They are namespaced to the module's path.
+
+```typescript
+type ModuleEvents = {
+  ':registered': [module: GenericModule];
+  ':loaded':     [module: GenericModule];
+  ':unloaded':   [module: GenericModule];
+  ':enabled':    [module: GenericModule];
+  ':disabled':   [module: GenericModule];
+};
+```
+
+## Error types
+
+```typescript
+// Thrown on invalid state transitions (e.g. disabling a module that has
+// no onDisable but has onEnable).
+export class ModuleError extends Error {}
+
+// Thrown when a dependency cycle is detected.
+export class CyclicDependencyError extends ModuleError {
+  modules: GenericModule[]; // The modules involved in the cycle
+}
+```
+
+## `loadFromContext(ctx)`
+
+A convenience method that accepts a webpack `require.context` object and registers all exported module classes found within it. Used internally by FFZ to discover modules under `src/modules/`.
+
+```typescript
+const ctx = require.context('./modules', true, /\.tsx?$/);
+await this.loadFromContext(ctx);
+```

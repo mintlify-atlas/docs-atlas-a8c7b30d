@@ -1,0 +1,280 @@
+---
+title: Settings System
+description: Profiles, contexts, providers, and how to define settings in FrankerFaceZ.
+---
+
+The FFZ settings system provides persistent, profile-aware, context-sensitive configuration for both core features and add-ons. It is managed by `SettingsManager` (mounted at the path `settings`) and is one of the first subsystems enabled at startup.
+
+## Key concepts
+
+<CardGroup cols={2}>
+  <Card title="Provider" icon="database">
+    Reads and writes raw key/value data to a storage backend (e.g. `localStorage`, IndexedDB, or a remote service).
+  </Card>
+  <Card title="Profile" icon="layer-group">
+    A named set of overrides. Multiple profiles can be active simultaneously; they are applied in priority order.
+  </Card>
+  <Card title="Context" icon="filter">
+    A `SettingsContext` wraps a set of active profiles and a context object (current channel, route, etc.) to resolve the effective value of each setting.
+  </Card>
+  <Card title="Definition" icon="file-code">
+    A `SettingDefinition` declares the default value, type, UI metadata, and optional processing for a setting key.
+  </Card>
+</CardGroup>
+
+## Defining a setting
+
+Call `settings.add(key, definition)` to register a setting. The key is a dot-separated string that must be declared in `SettingsTypeMap` for full TypeScript type safety.
+
+```typescript
+// Extend SettingsTypeMap so TypeScript knows about your setting:
+declare module 'utilities/types' {
+  interface SettingsTypeMap {
+    'my-addon.show-overlay': boolean;
+    'my-addon.overlay-opacity': number;
+  }
+}
+
+// Then register the settings:
+settings.add('my-addon.show-overlay', {
+  default: true,
+  ui: {
+    path: 'Add-Ons > My Addon >> Overlay',
+    title: 'Show Overlay',
+    description: 'Displays the custom overlay on stream pages.',
+    component: 'setting-check-box',
+  }
+});
+
+settings.add('my-addon.overlay-opacity', {
+  default: 80,
+  ui: {
+    path: 'Add-Ons > My Addon >> Overlay',
+    title: 'Overlay Opacity',
+    component: 'setting-text-box',
+    process: 'to_int',
+    bounds: [0, 100],
+  }
+});
+```
+
+<Note>
+  In add-on code you receive a proxied `SettingsManager` from `this.resolve('settings')` or via `inject('settings')`. The proxy automatically stamps your `addon_id` on every call to `add()`, so you never need to pass the source explicitly.
+</Note>
+
+### `SettingDefinition<T>` shape
+
+```typescript
+type FullSettingDefinition<T> = {
+  /** Required. The default value, or a function that receives the
+   *  current SettingsContext and returns the default. */
+  default: ((ctx: SettingsContext) => T) | T;
+
+  /** Optional type tag used by processors/validators. */
+  type?: string;
+
+  /** Custom equality check. Use 'requirements' to re-compute when
+   *  this setting's requires list changes. */
+  equals?: 'requirements' | ((new_value: T, old_value: T | undefined,
+    cache: Map<SettingsKeys, unknown>,
+    old_cache: Map<SettingsKeys, unknown>) => boolean);
+
+  /** Post-process the raw stored value before surfacing it. */
+  process?(ctx: SettingsContext, val: T, meta: SettingMetadata): T;
+
+  /** Other settings this definition's value depends on. */
+  requires?: string[];
+
+  /** When true, always inherit from a parent context rather than
+   *  reading from profiles. */
+  always_inherit?: boolean;
+
+  /** UI definition for the settings panel. */
+  ui?: SettingUiDefinition<T>;
+
+  /** Callback fired whenever the setting changes in main_context. */
+  changed?: (value: T) => void;
+};
+```
+
+## Reading settings
+
+### From a context (recommended)
+
+`SettingsManager` exposes `main_context` — a `SettingsContext` pre-populated with all currently active profiles.
+
+```typescript
+const settings = this.resolve('settings')!;
+
+// Read a value once:
+const opacity = settings.get('my-addon.overlay-opacity'); // number
+
+// Read and subscribe to changes:
+settings.getChanges('my-addon.show-overlay', (value: boolean) => {
+  this.overlay.setVisible(value);
+}, this);
+
+// Subscribe to changes without an immediate call:
+settings.onChange('my-addon.show-overlay', (value: boolean) => {
+  this.overlay.setVisible(value);
+}, this);
+```
+
+### Watching for specific change events
+
+`SettingsManager` emits `:changed:<key>` on the event bus whenever a setting value changes.
+
+```typescript
+settings.on(':changed:my-addon.show-overlay',
+  (value: boolean, old_value: boolean) => {
+    console.log('overlay visibility changed:', value);
+  },
+  this
+);
+```
+
+## Profiles
+
+Profiles are ordered layers of overrides. When a context evaluates a setting it walks the active profiles in priority order and returns the first defined value, falling back to the definition's `default`.
+
+Profiles can be toggled on or off and can include **filter rules** so that they only apply to certain routes, channels, or viewer states.
+
+```typescript
+// Events emitted by SettingsManager when profiles change:
+type SettingsEvents = {
+  ':profile-created':    [profile: SettingsProfile];
+  ':profile-changed':    [profile: SettingsProfile];
+  ':profile-deleted':    [profile: SettingsProfile];
+  ':profile-toggled':    [profile: SettingsProfile, enabled: boolean];
+  ':profiles-reordered': [];
+};
+```
+
+## Contexts
+
+A `SettingsContext` merges a set of active profiles with a context object describing the current page state. The context object is typed as `ContextData` (a deep-partial of `ConcreteContextData`).
+
+```typescript
+type ConcreteContextData = {
+  channel:    string;
+  channelID:  string;
+  moderator:  boolean;
+  fullscreen: boolean;
+  route: {
+    domain: string | null;
+    name:   string | null;
+  };
+  ui: {
+    theme: number;
+    theatreModeEnabled: boolean;
+  };
+  // … and more
+};
+```
+
+The site layer keeps `main_context` updated as the user navigates Twitch:
+
+```typescript
+// Update the context with new data (merges into existing context):
+settings.updateContext({ channel: 'lirik', moderator: false });
+
+// Replace the entire context:
+settings.setContext({ channel: 'lirik', moderator: false });
+```
+
+Context values are accessible as settings keys prefixed with `context.`:
+
+```typescript
+context.get('context.channel');      // string | undefined
+context.get('context.ui.theme');     // number | undefined
+```
+
+LocalStorage values are accessible with the `ls.` prefix:
+
+```typescript
+context.get('ls.some-ls-key');       // value from localStorage
+context.get('ls.raw.some-ls-key');   // raw string from localStorage
+```
+
+## Providers
+
+A provider is the storage backend. Two built-in abstract classes are provided:
+
+```typescript
+// Base provider — synchronous key/value storage (e.g. localStorage)
+abstract class SettingsProvider extends EventEmitter<ProviderEvents> {
+  abstract get<T>(key: string, default_value?: T): T | undefined;
+  abstract set<T>(key: string, value: T): void;
+  abstract delete(key: string): void;
+  abstract clear(): void;
+  abstract has(key: string): boolean;
+  abstract keys(): Iterable<string>;
+  abstract entries(): Iterable<[string, any]>;
+  abstract get size(): number;
+}
+
+// Advanced provider — adds binary blob support (e.g. IndexedDB)
+abstract class AdvancedSettingsProvider extends SettingsProvider {
+  abstract getBlob(key: string): Promise<BlobLike | null>;
+  abstract setBlob(key: string, value: BlobLike): Promise<void>;
+  abstract deleteBlob(key: string): Promise<void>;
+  abstract clearBlobs(): Promise<void>;
+  abstract blobKeys(): Promise<Iterable<string>>;
+}
+```
+
+The active provider at runtime is `settings.provider`. FFZ selects the provider automatically at startup and logs which one was chosen:
+
+```
+Using Provider: LocalStorageProvider
+```
+
+### Registering a custom provider
+
+Third-party code can register a custom provider before FFZ initializes by pushing a callback onto `window.ffz_providers`:
+
+```typescript
+window.ffz_providers = window.ffz_providers || [];
+window.ffz_providers.push(({ registerProvider, AdvancedProvider }) => {
+  class MyProvider extends AdvancedProvider {
+    static supported() { return true; }
+    // … implement abstract methods
+  }
+
+  registerProvider('my-provider', MyProvider);
+});
+```
+
+<Warning>
+  `window.ffz_providers` is sealed as soon as `SettingsManager` is constructed. Entries pushed after that point are silently ignored.
+</Warning>
+
+## Profile events
+
+The `:changed:<key>` events let modules react to any setting change without polling:
+
+```typescript
+export class MyModule extends Module<'addon.my-addon'> {
+  settings!: SettingsManager;
+
+  protected onEnable() {
+    this.settings.getChanges(
+      'my-addon.show-overlay',
+      this.onOverlayToggle,
+      this
+    );
+  }
+
+  protected onDisable() {
+    this.settings.off(
+      ':changed:my-addon.show-overlay',
+      this.onOverlayToggle,
+      this
+    );
+  }
+
+  private onOverlayToggle(value: boolean) {
+    // Reacts immediately on enable and on every future change
+  }
+}
+```

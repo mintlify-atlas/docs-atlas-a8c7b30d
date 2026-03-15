@@ -1,0 +1,101 @@
+---
+title: Editor Settings
+description: Recommended editor configuration for contributing to FrankerFaceZ — indentation style, line endings, ESLint setup, and VS Code workspace settings.
+---
+
+FrankerFaceZ enforces consistent formatting through `.editorconfig` and ESLint. Configure your editor to match these settings before submitting changes.
+
+## Indentation and line endings
+
+<Warning>
+  Use **tabs** for indentation, not spaces. Lines must end with `\n` (LF). Pull requests with spaces or CRLF line endings will need to be corrected before merging.
+</Warning>
+
+The `.editorconfig` at the repository root defines the authoritative formatting rules:
+
+```ini
+root = true
+
+[*]
+indent_style = tab
+indent_size = tab
+tab_width = 4
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.yaml]
+indent_style = space
+indent_size = 2
+
+[*.yml]
+indent_style = space
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+insert_final_newline = false
+```
+
+YAML files use 2-space indentation. Markdown files skip trailing whitespace trimming and do not require a final newline.
+
+## ESLint
+
+ESLint is configured in `.eslintrc.js`. The config extends `eslint:recommended` and `plugin:vue/recommended`, with additional rules for React JSX (FFZ uses React's JSX transform for some Twitch UI patches).
+
+Key rules:
+
+| Rule | Setting | Notes |
+|---|---|---|
+| `indent` | `tab` | Tab indentation enforced, with `SwitchCase: 1` |
+| `linebreak-style` | `unix` | LF line endings required |
+| `quotes` | `single` | Single quotes; template literals and escape-avoidance allowed |
+| `jsx-quotes` | `prefer-double` | Double quotes in JSX attributes |
+| `no-var` | error | Use `const` or `let` only |
+| `prefer-const` | warn | Prefer `const` where the binding is never reassigned |
+| `prefer-template` | warn | Prefer template literals over string concatenation |
+| `react/jsx-no-bind` | error | No inline arrow functions as JSX event handlers |
+| `react/jsx-sort-props` | error | Props must be sorted (`reservedFirst`, `callbacksLast`) |
+
+To run the linter across all JS, JSX, and Vue files:
+
+```bash
+pnpm eslint
+```
+
+## VS Code setup
+
+If you use Visual Studio Code, install the [ESLint extension](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) and add the following to your workspace settings (`.vscode/settings.json`):
+
+```json
+{
+	"eslint.validate": [
+		"javascript",
+		"javascriptreact",
+		"vue"
+	]
+}
+```
+
+This tells the ESLint extension to lint `.jsx` and `.vue` files in addition to plain `.js` files, which are not validated by default.
+
+<Tip>
+  The ESLint extension will also pick up the `.editorconfig` rules automatically if you have the [EditorConfig extension](https://marketplace.visualstudio.com/items?itemName=EditorConfig.EditorConfig) installed. Both extensions together give you real-time feedback on indentation and formatting as you type.
+</Tip>
+
+## Other editors
+
+Any editor with EditorConfig support will apply the tab/LF rules automatically. For ESLint integration, refer to your editor's documentation for the appropriate ESLint plugin or language server configuration.
+
+The ESLint config's `globals` block declares the following webpack-injected globals so the linter does not report them as undefined:
+
+```js
+'__webpack_hash__': false,
+'__git_commit__': false,
+'__version_major__': false,
+'__version_minor__': false,
+'__version_patch__': false,
+'__version_prerelease__': false,
+'__extension__': false,
+'FrankerFaceZ': false
+```

@@ -1,0 +1,246 @@
+---
+title: Event System
+description: FFZ's typed hierarchical EventEmitter — on/off/emit/waitFor, namespaced events, and control-flow symbols.
+---
+
+FFZ ships its own event emitter (`utilities/events.ts`) rather than relying on the DOM's `EventTarget` or Node's `EventEmitter`. Key features:
+
+- **Priority ordering** — listeners are sorted by a numeric priority (lower fires first).
+- **TTL / auto-detach** — listeners can fire a limited number of times before being removed automatically.
+- **Control-flow symbols** — listeners can stop propagation or remove themselves by returning a `Symbol`.
+- **Hierarchical namespacing** — events use dot-separated paths, so a module at `chat.emotes` can emit `:updated` and listeners on the root can subscribe to `chat.emotes:updated`.
+- **`waitFor`** — returns a `Promise` that resolves with the next emission of an event.
+
+## Class hierarchy
+
+```
+EventEmitter
+  └── HierarchicalEventEmitter      (shared listener pool, path-aware)
+        └── Module                  (adds lifecycle + dependency injection)
+```
+
+In practice you will interact with the event API almost exclusively through `Module` subclasses.
+
+## Control-flow symbols
+
+```typescript
+import { Detach, StopPropagation } from 'utilities/events';
+
+// Return Detach from a listener to remove it automatically:
+settings.on(':changed:my-addon.show-overlay', (value) => {
+  applyOnce(value);
+  return Detach;           // listener is removed after this call
+});
+
+// Return StopPropagation to prevent subsequent listeners from firing:
+emitter.on('some:event', (data) => {
+  if (shouldBlock(data))
+    return StopPropagation; // no further listeners receive the event
+});
+```
+
+Both symbols are also available as static properties: `EventEmitter.Detach` and `EventEmitter.StopPropagation`.
+
+## Core API
+
+### `on(event, fn, ctx?, priority?, prepend?)`
+
+Registers a persistent listener. `ctx` defaults to `this` when called on a `Module`. `priority` defaults to `0`; lower numbers fire first.
+
+```typescript
+export class MyModule extends Module<'addon.my-addon'> {
+  protected onEnable() {
+    // Relative event — expands to 'addon.my-addon:ready'
+    this.on(':ready', this.handleReady, this);
+
+    // Absolute path to another module's event
+    this.on('chat.emotes:updated', this.handleEmotesUpdated, this);
+
+    // High-priority listener fires before default-priority ones
+    this.on('chat:message', this.earlyFilter, this, -10);
+  }
+}
+```
+
+### `once(event, fn, ctx?, priority?, prepend?)`
+
+Same as `on()` but the listener fires exactly once and is then automatically removed. Equivalent to `many(event, 1, fn, ...)`.
+
+```typescript
+this.once('chat.emotes:populated', () => {
+  console.log('Emotes are ready for the first time');
+});
+```
+
+### `many(event, ttl, fn, ctx?, priority?, prepend?)`
+
+Fires at most `ttl` times. `ttl` must be a positive finite number.
+
+```typescript
+// Respond to the first 3 chat messages, then stop
+this.many('chat:message', 3, this.logMessage, this);
+```
+
+### `waitFor(event, ctx?, priority?, prepend?)`
+
+Returns a `Promise` that resolves with the arguments of the next emission as an array. The internal listener is automatically removed after it fires.
+
+```typescript
+const [message] = await this.waitFor('chat:message');
+console.log('First message received:', message);
+
+// Waiting for a module lifecycle event:
+await this.waitFor('chat.emotes:populated');
+```
+
+### `off(event?, fn?, ctx?)`
+
+Removes listeners. At least one of `event`, `fn`, or `ctx` must be provided. All matching listeners are removed.
+
+```typescript
+// Remove a specific listener:
+this.off(':ready', this.handleReady, this);
+
+// Remove all listeners for an event:
+this.off('chat:message');
+
+// Remove all listeners registered by this context:
+this.off(undefined, undefined, this);
+```
+
+<Warning>
+  Calling `off()` while the event is currently being dispatched throws a `concurrent modification` error. Remove a listener from within a listener by returning `Detach` instead.
+</Warning>
+
+### `emit(event, ...args)`
+
+Dispatches an event to all registered listeners in priority order. Listeners that return `StopPropagation` or that call `stopPropagation()` on an `FFZEvent` argument halt dispatch.
+
+```typescript
+this.emit(':updated', newData);
+this.emit('addon.my-addon:status-changed', 'active');
+```
+
+<Note>
+  `emit()` is synchronous. If a listener throws, the error is logged and dispatch continues to the next listener.
+</Note>
+
+## Namespaced events
+
+### Relative vs absolute paths
+
+Events that begin with `:` are **relative** — they are automatically prefixed with the module's own path.
+
+```typescript
+// Inside a module at path 'chat.emotes':
+this.emit(':updated');   // emits 'chat.emotes:updated'
+this.on(':updated', …);  // listens on 'chat.emotes:updated'
+```
+
+Events that do not begin with `:` or `.` are treated as **absolute** and used as-is.
+
+### Dot-traversal
+
+The `abs_path()` method converts a relative or traversal path into an absolute one. You can use leading dots to walk up the module tree:
+
+| Expression (inside `chat.emotes`) | Resolved path |
+|---|---|
+| `:updated` | `chat.emotes:updated` |
+| `..:line-tokens` | `chat:line-tokens` |
+| `..emoji:populated` | `chat.emoji:populated` |
+| `.` | `chat.emotes` |
+
+```typescript
+// From chat.emotes, listen to an event on the parent (chat):
+this.on('..:line-tokens', this.handleTokens, this);
+
+// Resolve the absolute path of a sibling module:
+const path = this.abs_path('..emoji'); // → 'chat.emoji'
+```
+
+### Shared listener pool
+
+All modules in the same tree share a single `__listeners` object stored on the root. This means events can be subscribed and emitted across any module in the tree without explicit wiring — the path acts as a namespace that keeps them from colliding.
+
+## FFZEvent and FFZWaitableEvent
+
+For events where the emitter wants to collect feedback from listeners, FFZ provides structured event objects.
+
+### `FFZEvent`
+
+A plain event object with `stopPropagation()` and `preventDefault()` support. Create instances with the static factory method.
+
+```typescript
+const evt = FFZEvent.makeEvent({ channel: 'lirik', value: 42 });
+// evt.channel → 'lirik'  (type-safe via TypedFFZEvent)
+// evt.value   → 42
+
+emitter.emit('some:event', evt);
+
+if (evt.defaultPrevented) {
+  // A listener called evt.preventDefault()
+}
+```
+
+### `FFZWaitableEvent`
+
+Extends `FFZEvent` with support for asynchronous listeners. Listeners may return a `Promise` (it is captured automatically) or call `evt.waitFor(promise)` directly. The emitter can then await all registered promises via `evt._wait()`.
+
+```typescript
+const evt = FFZWaitableEvent.makeEvent<{ items: string[] }>({ items: [] });
+
+emitter.emit('populate:items', evt);
+
+// Wait for all async listeners to finish:
+const results = await evt._wait();
+```
+
+## Listener metadata
+
+Each registered listener is stored internally as a `ListenerInfo` tuple:
+
+```typescript
+type ListenerInfo<TArgs extends any[] = any[]> = [
+  listener: EventListener<TArgs>,
+  context:  any,
+  ttl:      number | false,   // false = unlimited; 1 = fires once
+  priority: number,           // lower = fires first
+  prepend:  boolean
+];
+```
+
+You can inspect active listeners directly:
+
+```typescript
+const list  = emitter.listeners('chat:message');    // ListenerInfo[]
+const has   = emitter.hasListeners('chat:message'); // boolean
+const keys  = emitter.events();                     // string[]
+```
+
+## Transferring listeners
+
+`EventEmitter.transferListeners(other)` moves all listeners from one emitter to another, removing them from the source. This is not supported for `HierarchicalEventEmitter` instances that share the same root, because they already share the same pool.
+
+## TypeScript typing
+
+`Module` is generic over the namespace (`TNamespace`) and event map (`TEventMap`). Providing these types gives full inference over event names and argument types.
+
+```typescript
+type MyEvents = {
+  ':ready':    [];
+  ':updated':  [data: MyData];
+  ':error':    [err: Error];
+};
+
+export class MyModule extends Module<'addon.my-addon', MyEvents> {
+  protected onEnable() {
+    // TypeScript knows ':updated' delivers MyData
+    this.on(':updated', (data: MyData) => { /* … */ });
+
+    // Emitting with wrong args is a compile-time error
+    this.emit(':updated', myData);
+  }
+}
+```
+
+Known events from other core modules are merged into `TExtraEvents` automatically via `KnownEvents` in `utilities/types.ts`, so you can listen to events from `main_menu`, `chat`, and other well-known modules without importing their event map types directly.

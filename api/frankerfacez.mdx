@@ -1,0 +1,194 @@
+---
+title: FrankerFaceZ
+description: The root FrankerFaceZ class — entry point, static properties, utilities namespace, and diagnostics.
+---
+
+`FrankerFaceZ` is the top-level class that bootstraps the entire extension. It extends [`Module`](/api/module) and is instantiated once when the extension loads. The live instance is exposed as `window.ffz` and the class itself as `window.FrankerFaceZ`.
+
+```typescript
+import Module, { State } from 'utilities/module';
+
+class FrankerFaceZ extends Module { ... }
+
+window.FrankerFaceZ = FrankerFaceZ;
+window.ffz = new FrankerFaceZ();
+```
+
+---
+
+## Static Properties
+
+<ParamField path="FrankerFaceZ.instance" type="FrankerFaceZ">
+  The singleton instance of `FrankerFaceZ`. Set automatically during construction. Use [`FrankerFaceZ.get()`](#get) as a convenience accessor.
+</ParamField>
+
+<ParamField path="FrankerFaceZ.version_info" type="ClientVersion">
+  Frozen object describing the currently running build.
+
+  <Expandable title="ClientVersion properties">
+    <ResponseField name="major" type="number">Major version number.</ResponseField>
+    <ResponseField name="minor" type="number">Minor version number.</ResponseField>
+    <ResponseField name="revision" type="number">Patch / revision number.</ResponseField>
+    <ResponseField name="extra" type="number">Pre-release identifier (e.g. beta suffix).</ResponseField>
+    <ResponseField name="commit" type="string | null">Short git commit hash of the build, or `null`.</ResponseField>
+    <ResponseField name="build" type="string">Build identifier string.</ResponseField>
+    <ResponseField name="hash" type="string">Webpack compilation hash.</ResponseField>
+  </Expandable>
+
+  The object also has a `toString()` method that returns a human-readable version string such as `"4.21.0-dev"`.
+</ParamField>
+
+<ParamField path="FrankerFaceZ.Logger" type="typeof Logger">
+  Direct reference to the `Logger` class from `utilities/logging`. Exposed so add-ons do not need to import it separately.
+</ParamField>
+
+---
+
+## Static Methods
+
+### `get()`
+
+```typescript
+static get(): FrankerFaceZ
+```
+
+Returns the current singleton instance of `FrankerFaceZ`. Equivalent to reading `FrankerFaceZ.instance`.
+
+```typescript
+const ffz = FrankerFaceZ.get();
+console.log(ffz.version_info.toString()); // e.g. "4.21.0"
+```
+
+---
+
+## Static `utilities` Namespace
+
+`FrankerFaceZ.utilities` is a plain object that re-exports every utility module. Add-ons should use these exports instead of importing from the module paths directly, so they stay compatible across FFZ versions.
+
+```typescript
+static utilities = {
+  addon:      Utility_Addons,
+  blobs:      Utility_Blobs,
+  color:      Utility_Color,
+  constants:  Utility_Constants,
+  dialog:     Utility_Dialog,
+  dom:        Utility_DOM,
+  events:     Utility_Events,
+  fontAwesome: Utility_FontAwesome,
+  graphql:    Utility_GraphQL,
+  logging:    Utility_Logging,
+  module:     Utility_Module,
+  object:     Utility_Object,
+  time:       Utility_Time,
+  tooltip:    Utility_Tooltip,
+  i18n:       Utility_I18n,
+  filtering:  Utility_Filtering,
+};
+```
+
+| Key | Module path |
+|---|---|
+| `addon` | `utilities/addon` |
+| `blobs` | `utilities/blobs` |
+| `color` | `utilities/color` |
+| `constants` | `utilities/constants` |
+| `dialog` | `utilities/dialog` |
+| `dom` | `utilities/dom` |
+| `events` | `utilities/events` |
+| `fontAwesome` | `utilities/font-awesome` |
+| `graphql` | `utilities/graphql` |
+| `logging` | `utilities/logging` |
+| `module` | `utilities/module` |
+| `object` | `utilities/object` |
+| `time` | `utilities/time` |
+| `tooltip` | `utilities/tooltip` |
+| `i18n` | `utilities/translation-core` |
+| `filtering` | `utilities/filtering` |
+
+```typescript
+// Recommended pattern in add-ons:
+const { color, dom } = FrankerFaceZ.utilities;
+```
+
+---
+
+## Instance Properties
+
+<ParamField path="host" type="string">
+  The host platform this build targets. Always `"twitch"` in the standard build.
+</ParamField>
+
+<ParamField path="flavor" type="string">
+  The page flavor. `"main"` for the regular Twitch front-end.
+</ParamField>
+
+<ParamField path="core_log" type="Logger">
+  A `Logger` instance scoped to `"core"`. Used for startup and shutdown messages.
+</ParamField>
+
+<Note>
+  All properties inherited from [`Module`](/api/module) are also available — including `log`, `state`, `load_state`, `enabled`, `settings`, `i18n`, and the full module tree.
+</Note>
+
+---
+
+## Instance Methods
+
+### `generateLog()`
+
+```typescript
+async generateLog(): Promise<string>
+```
+
+Collects diagnostic output from every registered module and returns it as a formatted plain-text string. Each module's section is separated by a dashed rule. The initialization log (captured during startup) is prepended as the first section.
+
+Module `generateLog` calls are individually wrapped in a 5-second timeout. If a module times out or throws, its section contains the error message instead of diagnostic data.
+
+```typescript
+const log = await FrankerFaceZ.get().generateLog();
+console.log(log);
+// initialization
+// -------------------------------------------------------------------------------
+// [0:00:01] info | core: Initialization complete in 312.00000ms.
+//
+// settings
+// -------------------------------------------------------------------------------
+// { ... }
+```
+
+<ResponseField name="return" type="Promise<string>">
+  A formatted multi-section diagnostic string.
+</ResponseField>
+
+---
+
+## Built-in Modules
+
+The following modules are injected during construction and available on the `ffz` instance:
+
+| Property | Module |
+|---|---|
+| `ffz.settings` | `SettingsManager` |
+| `ffz.experiments` | `ExperimentManager` |
+| `ffz.i18n` | `TranslationManager` |
+| `ffz.staging` | `StagingSelector` |
+| `ffz.load_tracker` | `LoadTracker` |
+| `ffz.socket` | `SocketClient` |
+| `ffz.pubsub` | `PubSubClient` |
+| `ffz.site` | `Site` |
+| `ffz.addons` | `AddonManager` |
+
+---
+
+## Global Window Interface
+
+```typescript
+declare global {
+  interface Window {
+    FrankerFaceZ: typeof FrankerFaceZ;
+    ffz: FrankerFaceZ;
+  }
+}
+```
+
+Both `window.FrankerFaceZ` and `window.ffz` are set unconditionally on load.

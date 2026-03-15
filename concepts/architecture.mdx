@@ -1,0 +1,122 @@
+---
+title: Architecture
+description: High-level overview of FrankerFaceZ's module tree, site integration layer, and add-on system.
+---
+
+FrankerFaceZ (FFZ) is a Twitch enhancement suite built as a tree of cooperating **modules**. Every feature — chat rendering, emote management, the settings UI, socket communication — lives in its own module. Modules are loaded and enabled independently, declare dependencies on one another, and communicate through a shared hierarchical event bus.
+
+## Runtime structure
+
+When FFZ boots, a single root instance of `FrankerFaceZ` (itself a `Module`) is created and attached to `window.ffz`. During construction it injects the core subsystems and then discovers additional modules from the webpack context under `src/modules/`.
+
+```typescript
+// src/main.ts (simplified)
+class FrankerFaceZ extends Module {
+  constructor() {
+    super();
+
+    // Core subsystems
+    this.inject('settings',     SettingsManager);
+    this.inject('experiments',  ExperimentManager);
+    this.inject('i18n',         TranslationManager);
+    this.inject('socket',       SocketClient);
+    this.inject('pubsub',       PubSubClient);
+    this.inject('site',         Site);
+    this.inject('addons',       AddonManager);
+
+    this.discoverModules()
+      .then(() => this.enable())
+      .then(() => this.enableInitialModules());
+  }
+}
+
+window.ffz = new FrankerFaceZ();
+```
+
+All modules share a flat registry (`__modules`) keyed by their dot-separated path. The root module's path is `core`; a module injected as `settings` is accessible at `settings`; a child of `site` named `router` is at `site.router`.
+
+## Module tree
+
+The tree is not a strict hierarchy — it is a **directed graph** of dependencies. A module may `inject` or `resolve` any other module regardless of depth.
+
+```
+core (FrankerFaceZ)
+├── settings      (SettingsManager)
+├── experiments   (ExperimentManager)
+├── i18n          (TranslationManager)
+├── socket        (SocketClient)
+├── pubsub        (PubSubClient)
+├── addons        (AddonManager)
+└── site          (Site)
+    ├── site.router
+    ├── site.apollo
+    ├── site.web_munch
+    └── … (discovered from src/modules/)
+```
+
+Modules underneath `site` are registered automatically from `src/modules/` using webpack's `require.context`. Each file that exports a default `Module` subclass (or an export named `module`) is registered and injected onto the parent.
+
+## Site integration layer
+
+FFZ targets multiple Twitch surfaces (main site, clips, player). The `Site` module acts as the adapter: it loads the correct set of platform-specific modules based on the active flavor (`main`, `clips`, `player`). Add-ons declare which flavors they support in their manifest using the `targets` field.
+
+```typescript
+// AddonInfo.targets controls which flavors load the add-on
+type AddonInfo = {
+  id: string;
+  targets: string[];   // e.g. ['main', 'clips']
+  // …
+};
+```
+
+## Add-on system
+
+Add-ons are isolated bundles of one or more `Module` subclasses mounted under the `addon.<id>` namespace. The root module of an add-on should extend `Addon` (a subclass of `Module`) and carry a static `info` property with the add-on manifest.
+
+<CardGroup cols={2}>
+  <Card title="Module System" icon="cubes" href="/concepts/module-system">
+    Lifecycle, dependency injection, `resolve` / `inject` / `register`
+  </Card>
+  <Card title="Settings" icon="sliders" href="/concepts/settings">
+    Profiles, contexts, providers, defining settings
+  </Card>
+  <Card title="Events" icon="bolt" href="/concepts/events">
+    Typed events, namespacing, `on` / `off` / `emit` / `waitFor`
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build your first add-on
+  </Card>
+</CardGroup>
+
+## Module isolation and proxies
+
+When a module belonging to an add-on calls `resolve()` or `inject()`, the module system checks whether the target module implements `getAddonProxy()`. If it does, the add-on receives a `Proxy` of the module rather than the module itself. This lets core modules restrict or instrument the API surface exposed to add-ons without affecting internal consumers.
+
+```typescript
+// Core modules may implement this to sandbox add-on access
+getAddonProxy(
+  addon_id: string,
+  addon: AddonInfo,
+  root: GenericModule,
+  caller: GenericModule
+): Module<TNamespace, TEventMap>
+```
+
+`SettingsManager` uses this mechanism to automatically tag every setting definition created by an add-on with the add-on's ID.
+
+## Startup sequence
+
+<Steps>
+  <Step title="Instantiate root">
+    `new FrankerFaceZ()` runs; core subsystems are injected via `inject()`.
+  </Step>
+  <Step title="Discover modules">
+    `discoverModules()` walks `src/modules/` through webpack's `require.context` and registers each exported module class.
+  </Step>
+  <Step title="Enable root">
+    `this.enable()` triggers the enable cascade. Each module's `requires` dependencies are enabled first; `onEnable()` is called once all dependencies are ready.
+  </Step>
+  <Step title="Enable initial modules">
+    `enableInitialModules()` iterates all registered modules and enables those with `should_enable = true`. This covers modules that are direct children of `core` or `site` and should always be active.
+  </Step>
+</Steps>
